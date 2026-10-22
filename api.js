@@ -108,6 +108,13 @@ async function fetchPools(opts, mode) {
   if (!out.size && lastErr) throw lastErr;
   return Array.from(out.values());
 }
+/* buang stablecoin dan token besar yang bukan memecoin */
+function isMemeLike(P) {
+  const sym = String(P.tgt.symbol || '');
+  if (/^(usd|pyusd|fdusd|tusd|susd|eur|dai|ust)/i.test(sym) || /usd[a-z]?$/i.test(sym)) return false;
+  if (P.tgt.mcap >= 2e8) return false;
+  return true;
+}
 /* pool baru yang berpotensi memecoin: TVL kecil sampai menengah, umur di bawah 45 hari, token belum mapan */
 async function fetchMemePools(opts, mode) {
   opts = opts || {};
@@ -127,7 +134,7 @@ async function fetchMemePools(opts, mode) {
     }
     (j.data || []).forEach(r => {
       const P = normPool(r);
-      if (P && !P.blacklisted && !P.s.established && P.s.age <= 45 && P.s.tvl >= minTvl && P.vol24 >= minVol && !out.has(P.addr)) out.set(P.addr, P);
+      if (P && !P.blacklisted && !P.s.established && P.s.age <= 45 && P.s.tvl >= minTvl && P.vol24 >= minVol && !out.has(P.addr) && isMemeLike(P)) out.set(P.addr, P);
     });
   }
   if (!out.size && lastErr) throw lastErr;
@@ -195,6 +202,6 @@ async function closedPositions(wallet, days, mode) {
 }
 const validAddr = a => typeof a === 'string' && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(a.trim());
 
-root.LPAPI = { BASE, SOL, QUOTES, normPool, fetchPools, fetchMemePools, fetchPool, fetchCandles, checkToken, solBalance, openPositions, closedPositions, validAddr, meteora, rpc, sleep };
+root.LPAPI = { isMemeLike, BASE, SOL, QUOTES, normPool, fetchPools, fetchMemePools, fetchPool, fetchCandles, checkToken, solBalance, openPositions, closedPositions, validAddr, meteora, rpc, sleep };
 if (typeof module !== 'undefined' && module.exports) module.exports = root.LPAPI;
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -390,10 +390,12 @@ async function doMemeScan() {
     const list = pools.sort((a, b) => b._pre - a._pre).slice(0, 24);
     st().textContent = 'Membaca pergerakan harga per jam ' + list.length + ' pool…'; await tick();
     await pmap(list, 5, P => enrich(P, { sec: false }));
+    const list2 = list.filter(P => !(P.sigmaOK && P.s.sigma < 1.5));   // harga hampir tidak bergerak: stablecoin atau token terkunci, bukan memecoin
+    if (!list2.length) throw new Error('Tidak ada memecoin yang memenuhi syarat saat ini.');
     st().textContent = 'Mengecek keamanan token lewat RPC…'; await tick();
-    for (const P of list.slice(0, 10)) { await enrich(P, { candles: false }); await A.sleep(250); }
+    for (const P of list2.slice(0, 10)) { await enrich(P, { candles: false }); await A.sleep(250); }
     st().textContent = 'Mengevaluasi strategi…'; await tick();
-    const items = list.map(P => ({ P, ev: evalMemeP(P, H) }));
+    const items = list2.map(P => ({ P, ev: evalMemeP(P, H) }));
     items.sort((a, b) => (a.ev.skip - b.ev.skip) || (b.ev.best.score - a.ev.best.score));
     memeRes = { t: Date.now(), H, items };
     S.lastMeme = { t: memeRes.t, H, items: items.map(r => compactMeme(r.P, r.ev)).slice(0, 20) };
@@ -425,7 +427,7 @@ function memeDetailHTML(P, ev) {
   h += planHTML(ev, arm);
   h += '<h4>Aturan keluar</h4><ul class="ex">' + EXITS_MEME(H).map(t => '<li>' + esc(t) + '</li>').join('') + '</ul>';
   h += '<div class="win"><b class="num">' + nf(sim.pWin * 100, 0) + '%</b><span>peluang berakhir untung setelah fee dalam ' + hrs(H) + '</span></div>' + histSVG(sim.hist);
-  h += '<dl class="kv"><div><dt>Rata-rata (sudah dikoreksi pengalaman)</dt><dd class="' + sg(arm.mean) + '">' + pct(arm.mean) + '</dd></div><div><dt>Skenario buruk (1 dari 10)</dt><dd class="' + sg(arm.p10) + '">' + pct(arm.p10) + '</dd></div><div><dt>Kena stop rugi</dt><dd>' + nf(sim.pStop * 100, 0) + '%</dd></div><div><dt>Rugi lebih dari 20%</dt><dd>' + nf(sim.pLoss20 * 100, 0) + '%</dd></div><div><dt>Koreksi dari pengalaman</dt><dd class="' + sg(arm.adj) + '">' + pct(arm.adj) + '</dd></div></dl>';
+  h += '<dl class="kv"><div><dt>Rata-rata (sudah dikoreksi pengalaman)</dt><dd class="' + sg(arm.mean) + '">' + pct(arm.mean) + '</dd></div><div><dt>Skenario buruk (1 dari 10)</dt><dd class="' + sg(arm.p10) + '">' + pct(arm.p10) + '</dd></div><div><dt>Hitungan murni (sebelum koreksi)</dt><dd class="' + sg(sim.mean) + '">' + pct(sim.mean) + '</dd></div><div><dt>Rata-rata 1 dari 20 skenario terburuk</dt><dd class="' + sg(arm.es5) + '">' + pct(arm.es5) + '</dd></div><div><dt>Kena stop rugi</dt><dd>' + nf(sim.pStop * 100, 0) + '%</dd></div><div><dt>Rugi lebih dari 20%</dt><dd>' + nf(sim.pLoss20 * 100, 0) + '%</dd></div><div><dt>Koreksi dari pengalaman</dt><dd class="' + sg(arm.adj) + '">' + pct(arm.adj) + '</dd></div></dl>';
   h += '<h4>Faktor risiko</h4><ul class="rows">' + ev.a.rows.map(r => '<li class="fr"><span class="fn">' + esc(r.name) + '</span><span class="fv">' + esc(r.value) + '</span><span class="pill ' + r.level + '">' + (r.level === 'ok' ? 'Aman' : r.level === 'warn' ? 'Waspada' : 'Bahaya') + '</span><span class="fnote">' + esc(r.note) + '</span></li>').join('') + '</ul>';
   h += '<h4>Peringkat strategi</h4><div class="tblwrap"><table><thead><tr><th>Strategi</th><th>Rata-rata</th><th>Buruk</th><th>Stop</th></tr></thead><tbody>' +
     ev.arms.map(a => '<tr><td>' + E.STRATS[a.strat].name + ' ' + (a.strat === 'bidask' ? '-' : '±') + a.half + '%</td><td class="' + sg(a.mean) + '">' + pct(a.mean) + '</td><td class="' + sg(a.p10) + '">' + pct(a.p10, 0) + '</td><td>' + nf(a.sim.pStop * 100, 0) + '%</td></tr>').join('') + '</tbody></table></div>';
@@ -536,7 +538,7 @@ function detailHTML(P, ev) {
   h += planHTML(ev, arm);
   h += '<h4>Aturan keluar (contoh)</h4><ul class="ex">' + E.EXITS[ev.label].map(t => '<li>' + esc(t) + '</li>').join('') + '</ul>';
   h += '<div class="win"><b class="num">' + nf(sim.pWin * 100, 0) + '%</b><span>peluang berakhir untung setelah fee dalam 7 hari</span></div>' + histSVG(sim.hist);
-  h += '<dl class="kv"><div><dt>Rata-rata (sudah dikoreksi pengalaman)</dt><dd class="' + sg(arm.mean) + '">' + pct(arm.mean) + '</dd></div><div><dt>Skenario buruk (1 dari 10)</dt><dd class="' + sg(arm.p10) + '">' + pct(arm.p10) + '</dd></div><div><dt>Rugi lebih dari 20%</dt><dd>' + nf(sim.pLoss20 * 100, 0) + '%</dd></div><div><dt>Koreksi dari pengalaman</dt><dd class="' + sg(arm.adj) + '">' + pct(arm.adj) + '</dd></div></dl>';
+  h += '<dl class="kv"><div><dt>Rata-rata (sudah dikoreksi pengalaman)</dt><dd class="' + sg(arm.mean) + '">' + pct(arm.mean) + '</dd></div><div><dt>Hitungan murni (sebelum koreksi)</dt><dd class="' + sg(sim.mean) + '">' + pct(sim.mean) + '</dd></div><div><dt>Skenario buruk (1 dari 10)</dt><dd class="' + sg(arm.p10) + '">' + pct(arm.p10) + '</dd></div><div><dt>Rata-rata 1 dari 20 skenario terburuk</dt><dd class="' + sg(sim.es5 + arm.adj) + '">' + pct(sim.es5 + arm.adj) + '</dd></div><div><dt>Rugi lebih dari 20%</dt><dd>' + nf(sim.pLoss20 * 100, 0) + '%</dd></div><div><dt>Koreksi dari pengalaman</dt><dd class="' + sg(arm.adj) + '">' + pct(arm.adj) + '</dd></div></dl>';
   h += '<h4>Faktor risiko</h4><ul class="rows">' + ev.a.rows.map(r => '<li class="fr"><span class="fn">' + esc(r.name) + '</span><span class="fv">' + esc(r.value) + '</span><span class="pill ' + r.level + '">' + (r.level === 'ok' ? 'Aman' : r.level === 'warn' ? 'Waspada' : 'Bahaya') + '</span><span class="fnote">' + esc(r.note) + '</span></li>').join('') + '</ul>';
   h += '<h4>Peringkat strategi</h4><div class="tblwrap"><table><thead><tr><th>Strategi</th><th>Rata-rata</th><th>Buruk</th><th>Koreksi</th></tr></thead><tbody>' +
     ev.arms.slice(0, 5).map(a => '<tr><td>' + E.STRATS[a.strat].name + ' ' + (a.strat === 'bidask' ? '-' : '±') + a.plan.half + '%</td><td class="' + sg(a.mean) + '">' + pct(a.mean) + '</td><td class="' + sg(a.p10) + '">' + pct(a.p10, 0) + '</td><td>' + pct(a.adj) + '</td></tr>').join('') + '</tbody></table></div>';

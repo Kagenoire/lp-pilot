@@ -260,7 +260,8 @@ function simulate(s, pn, pool, o) {
   }
   const sorted = net.slice().sort((p, q) => p - q);
   const q = f => sorted[Math.floor(f * (N - 1))];
-  return { pWin: win / N, pLoss20: loss20 / N, p10: q(0.1), p50: q(0.5), p90: q(0.9), mean: sum / N, hist, meanFee: feeSum / N, k, V, base };
+  const k5 = Math.max(1, Math.floor(N * 0.05));
+  return { pWin: win / N, pLoss20: loss20 / N, p10: q(0.1), p50: q(0.5), p90: q(0.9), es5: avg(sorted.slice(0, k5)), mean: sum / N, hist, meanFee: feeSum / N, k, V, base };
 }
 
 /* ---------- evaluasi semua strategi untuk satu pool ---------- */
@@ -485,7 +486,8 @@ function simulateH(s, pn, pool, o) {
     hist[clamp(Math.floor((x * 100 + 100) / 10), 0, 15)]++;
   }
   const sorted = net.slice().sort((p, q) => p - q), q = f => sorted[Math.floor(f * (N - 1))];
-  return { pWin: win / N, pLoss20: loss20 / N, pStop: stopped / N, p10: q(0.1), p50: q(0.5), p90: q(0.9), mean: sum / N, hist, meanFee: feeSum / N, k };
+  const k5 = Math.max(1, Math.floor(N * 0.05));
+  return { pWin: win / N, pLoss20: loss20 / N, pStop: stopped / N, p10: q(0.1), p50: q(0.5), p90: q(0.9), es5: avg(sorted.slice(0, k5)), mean: sum / N, hist, meanFee: feeSum / N, k };
 }
 
 function planMeme(s, label, strat, half, cap, app) {
@@ -507,8 +509,9 @@ function evaluateMeme(s, L, cfg) {
     const plan = planMeme(s, label, st, half, cap, app);
     const sim = simulateH(s, plan, pool, { H, N: cfg.N || 300, rug: pH, seed });
     const adj = adjOf(L, bucket, plan.key);
-    const mean = sim.mean + adj, p10 = sim.p10 + adj;
-    return { key: plan.key, strat: st, half, plan, sim, adj, mean, p10, score: mean + lam * Math.min(0, p10) };
+    const mean = sim.mean + adj, p10 = sim.p10 + adj, es5 = sim.es5 + adj;
+    // memecoin: yang dihukum adalah rata-rata 5% skenario terburuk (ekor kiri), bukan hanya persentil ke-10
+    return { key: plan.key, strat: st, half, plan, sim, adj, mean, p10, es5, score: mean + lam * Math.min(0, es5) };
   }).sort((p, q) => q.score - p.score);
   const best = arms[0];
   const skip = label === 'hindari' || best.mean <= MEME_MIN_GAIN;
