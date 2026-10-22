@@ -105,12 +105,19 @@ async function fetchPools(opts, mode) {
   return Array.from(out.values());
 }
 async function fetchPool(addr, mode) { return normPool(await meteora('/pools/' + encodeURIComponent(addr), mode)); }
+/* API Meteora menolak rentang lebih dari sekitar 72 jam per permintaan (diuji 73 candle OK, 101 ditolak),
+   jadi rentang panjang diambil per potongan 72 jam lalu disambung. */
 async function fetchCandles(addr, hours, mode) {
-  const end = Math.floor(Date.now() / 1000), start = end - hours * 3600;
-  const j = await meteora('/pools/' + encodeURIComponent(addr) + '/ohlcv?' + q({ timeframe: '1h', start_time: start, end_time: end }), mode);
-  const d = (j && j.data) || [];
-  return d.map(c => ({ t: num(c.timestamp), open: num(c.open), high: num(c.high), low: num(c.low), close: num(c.close), volume: num(c.volume) }))
-    .filter(c => c.open > 0 && c.close > 0 && c.high > 0 && c.low > 0).sort((a, b) => a.t - b.t);
+  const end = Math.floor(Date.now() / 1000), CH = 72 * 3600;
+  const spans = [];
+  for (let e = end, left = hours * 3600; left > 0; e -= CH, left -= CH) spans.push([e - Math.min(CH, left), e]);
+  const parts = await Promise.all(spans.map(sp => meteora('/pools/' + encodeURIComponent(addr) + '/ohlcv?' + q({ timeframe: '1h', start_time: sp[0], end_time: sp[1] }), mode)));
+  const seen = new Map();
+  parts.forEach(j => ((j && j.data) || []).forEach(c => {
+    const t = num(c.timestamp);
+    if (t > 0) seen.set(t, { t, open: num(c.open), high: num(c.high), low: num(c.low), close: num(c.close), volume: num(c.volume) });
+  }));
+  return Array.from(seen.values()).filter(c => c.open > 0 && c.close > 0 && c.high > 0 && c.low > 0).sort((a, b) => a.t - b.t);
 }
 
 /* ---------- keamanan token via RPC ---------- */

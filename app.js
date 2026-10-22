@@ -241,7 +241,7 @@ async function enrich(P, o) {
   o = o || {};
   if (o.candles !== false) {
     try {
-      const c = await A.fetchCandles(P.addr, o.hours || 96, S.settings.mode);
+      const c = await A.fetchCandles(P.addr, o.hours || 72, S.settings.mode);
       P.candles = c;
       const s = E.sigmaFromCandles(c.slice(-72));
       if (s) { P.s.sigma = s; P.sigmaOK = true; }
