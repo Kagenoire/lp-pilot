@@ -56,19 +56,23 @@ function normPool(raw, now) {
   if (!(tvl > 0)) return null;
   const qx = !!QUOTES[x.address], qy = !!QUOTES[y.address];
   if (STABLE[x.address] && STABLE[y.address]) return null;               // stabil-stabil tidak dicakup model
+  const solStable = (x.address === SOL && !!STABLE[y.address]) || (y.address === SOL && !!STABLE[x.address]);
   let side;
-  if (qy && !qx) side = 'x'; else if (qx && !qy) side = 'y'; else side = num(x.market_cap) <= num(y.market_cap) ? 'x' : 'y';
+  if (solStable) side = x.address === SOL ? 'x' : 'y';                       // SOL melawan stablecoin: SOL adalah asetnya
+  else if (qy && !qx) side = 'x'; else if (qx && !qy) side = 'y'; else side = num(x.market_cap) <= num(y.market_cap) ? 'x' : 'y';
   const tgt = side === 'x' ? x : y, oth = side === 'x' ? y : x;
   const established = !!tgt.is_verified && num(tgt.market_cap) >= 5e7 && num(tgt.holders) >= 20000;
   const feeBase = num(raw.pool_config.base_fee_pct);
   const feeEff = vol24 > 0 && fees24 > 0 ? fees24 / vol24 * 100 : feeBase;
   const ageDays = raw.created_at ? Math.max(0.05, (now - num(raw.created_at)) / 864e5) : 30;
   // SOL sebagai aset utama melawan stablecoin: ukur dalam SOL
-  const measure = (x.address === SOL && STABLE[y.address]) ? 'base' : 'quote';
+  const measure = solStable ? 'base' : 'quote';
+  // pasangannya dolar (USDC/USDT) padahal modalmu SOL: hasil harus dikonversi ke SOL
+  const usdq = !solStable && !!STABLE[oth.address];
   const s = {
     addr: raw.address, tvl, vol: vol24, fee: feeEff, y0: fees24 / tvl, binStep: num(raw.pool_config.bin_step) || 10,
     sigma: 12, age: ageDays, top10: null, mint: null, freeze: tgt.freeze_authority_disabled === true ? true : tgt.freeze_authority_disabled === false ? false : null,
-    established, measure
+    established, measure, usdq, solSigma: 0
   };
   return {
     addr: raw.address, name: String(raw.name || (x.symbol + '-' + y.symbol)), s, feeEff, feeBase,

@@ -11,7 +11,7 @@ const KEY = 'lpp.v1';
 function defState() {
   return {
     settings: { wallet: '', rpc: 'https://api.mainnet-beta.solana.com', mode: 'auto', appetite: 'seimbang', minTvl: 100000, cap: 1, autoTrain: true },
-    learner: E.newLearner(), tracked: [], lastScan: null, wallet: { bal: null, t: 0, open: [], closed: [], err: null }, sec: {}
+    learner: E.newLearner(), tracked: [], practice: [], lastScan: null, wallet: { bal: null, t: 0, open: [], closed: [], err: null }, sec: {}
   };
 }
 function load() {
@@ -21,6 +21,11 @@ function load() {
     const d = defState(), s = Object.assign(d, j);
     s.settings = Object.assign(defState().settings, j.settings || {});
     s.learner = E.fixLearner(j.learner);
+    const oc = j.learner && j.learner.counts;
+    if (j.learner && j.learner.mv !== E.MV && oc && (oc.sim + oc.bt + oc.real + (oc.prac || 0)) > 0) {
+      s.notice = 'Cara hitung aplikasi diperbarui (semua hasil sekarang dalam SOL dan bentuk Curve, Spot, Bid-Ask dibedakan). Angka belajar lama tidak sebanding lagi, jadi hasil belajar direset. Catatan trade nyata dan posisi latihanmu tetap ada. Jalankan Latih otomatis dan Uji mundur lagi.';
+    }
+    s.practice = Array.isArray(j.practice) ? j.practice : [];
     s.tracked = Array.isArray(j.tracked) ? j.tracked : [];
     s.sec = j.sec && typeof j.sec === 'object' ? j.sec : {};
     s.wallet = Object.assign(defState().wallet, j.wallet || {});
@@ -65,12 +70,11 @@ function ladderSVG(pn) {
   const lo = Math.min(-20, (pn.pl - 1) * 100 - 6), hi = Math.max(20, (pn.ph - 1) * 100 + 6);
   const X = v => x0 + (v - lo) / (hi - lo) * (x1 - x0);
   const n = 56, rl = (pn.pl - 1) * 100, rw = (pn.ph - pn.pl) * 100, bw = (x1 - x0) / (hi - lo) * rw / n;
+  const wts = E.shapeW(pn.strat, n), wmax = Math.max.apply(null, wts);
   let o = '';
   for (let i = 0; i < n; i++) {
-    const c = rl + (i + 0.5) / n * rw; let h;
-    if (pn.strat === 'spot') h = 0.62;
-    else if (pn.strat === 'curve') h = Math.max(0.08, Math.exp(-0.5 * Math.pow(c / (rw / 5), 2)));
-    else h = 0.2 + 0.8 * Math.pow(clamp(-c / rw, 0, 1), 1.3);
+    const c = rl + (i + 0.5) / n * rw;
+    const h = 0.05 + 0.95 * wts[i] / wmax;
     const hh = h * maxH;
     o += '<rect class="' + (c < 0 ? 'bl' : 'br') + '" x="' + X(rl + i * rw / n).toFixed(1) + '" y="' + (base - hh).toFixed(1) + '" width="' + Math.max(1, bw - 0.6).toFixed(1) + '" height="' + hh.toFixed(1) + '" rx="1"/>';
   }
@@ -142,6 +146,7 @@ window.addEventListener('popstate', () => closeSheet(true));
 function renderHome() {
   const w = S.settings.wallet, ok = A.validAddr(w), c = S.learner.counts;
   let h = '';
+  if (S.notice) h += '<div class="panel"><h3>Pembaruan</h3><p class="note">' + esc(S.notice) + '</p><button class="btn small" data-act="notice-ok">Mengerti</button></div>';
   if (!ok) {
     h += '<div class="panel"><h3>Hubungkan wallet</h3><p class="note">Tempel alamat publik walletmu. Aplikasi hanya membaca saldo dan posisi LP. Jangan pernah memasukkan seed phrase atau private key ke aplikasi apa pun.</p>' +
       '<label class="f"><span class="lab">Alamat wallet Solana</span><input id="wallet-in" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Alamat publik, 32 sampai 44 karakter"></label>' +
@@ -169,7 +174,7 @@ function renderHome() {
     h += '<h4>Riwayat 90 hari terakhir</h4><p class="note">' + S.wallet.closed.length + ' pool ditutup, total untung-rugi <b class="num ' + sg(tot) + '">$' + nf(tot, 2) + '</b>.</p>';
   }
   h += '<div class="panel"><h3>Pengalaman aplikasi</h3><div class="stats3"><div><span class="k">Playground</span><b class="num">' + c.sim + '</b></div><div><span class="k">Data nyata</span><b class="num">' + c.bt + '</b></div><div><span class="k">Latihan</span><b class="num">' + (c.prac || 0) + '</b></div><div><span class="k">Trade kamu</span><b class="num">' + c.real + '</b></div></div>' +
-    '<p class="hint">' + (c.sim + c.bt + c.real === 0 ? 'Belum belajar apa-apa. Mulai dari tab Playground agar rekomendasi tidak murni tebakan.' : 'Detail ada di tab Belajar.') + '</p></div>';
+    '<p class="hint">' + (c.sim + c.bt + c.real === 0 ? 'Belum belajar apa-apa. Mulai dari tab Playground agar rekomendasi tidak murni tebakan.' : 'Detail ada di tab Belajar.') + '</p><button class="btn" data-act="how">Cara kerja aplikasi ini</button></div>';
   $('home-body').innerHTML = h;
 }
 
@@ -237,14 +242,43 @@ function pickHTML(i, k, weak) {
     '<div class="pick-stats"><span><i>Rata-rata 7 hari</i><b class="num ' + sg(i.mean) + '">' + pct(i.mean) + '</b></span><span><i>Skenario buruk</i><b class="num ' + sg(i.p10) + '">' + pct(i.p10, 0) + '</b></span><span><i>Peluang untung</i><b class="num">' + nf(i.win * 100, 0) + '%</b></span></div></button></li>';
 }
 
+/* harga SOL sebagai acuan: hasil pool berpasangan dolar harus dikonversi ke SOL */
+let solRef = null, solRefT = 0, solRefP = null;
+function getSolRef(hint) {
+  if (solRef && Date.now() - solRefT < 30 * 60000) return Promise.resolve(solRef);
+  if (solRefP) return solRefP;
+  solRefP = (async () => {
+    try {
+      let addr = S.solPool;
+      if (!addr) {
+        const list = hint || await A.fetchPools({ minTvl: S.settings.minTvl }, S.settings.mode);
+        const c = list.filter(P => P.s.measure === 'base').sort((a, b) => b.s.tvl - a.s.tvl)[0];
+        if (c) { addr = c.addr; S.solPool = addr; save(); }
+      }
+      if (!addr) return null;
+      const cs = await A.fetchCandles(addr, 244, S.settings.mode);
+      if (cs.length < 48) { S.solPool = null; return null; }
+      solRef = { candles: cs, sigma: E.sigmaFromCandles(cs.slice(-72)) || E.SOL_SIGMA }; solRefT = Date.now();
+      return solRef;
+    } catch (e) { S.solPool = null; return null; } finally { solRefP = null; }
+  })();
+  return solRefP;
+}
 async function enrich(P, o) {
   o = o || {};
   if (o.candles !== false) {
     try {
-      const c = await A.fetchCandles(P.addr, o.hours || 72, S.settings.mode);
+      const rs = await Promise.all([A.fetchCandles(P.addr, o.hours || 72, S.settings.mode), P.s.usdq ? getSolRef() : null]);
+      const c = rs[0], sr = rs[1];
       P.candles = c;
       const s = E.sigmaFromCandles(c.slice(-72));
       if (s) { P.s.sigma = s; P.sigmaOK = true; }
+      if (sr) P.s.solSigma = sr.sigma; else if (P.s.usdq) P.noSol = true;
+      // volume 24 jam sering lonjakan sesaat: campur dengan rata-rata 3 hari supaya fee tidak dilebih-lebihkan
+      if (c.length >= 72 && !P._yAdj) {
+        const l24 = c.slice(-24).reduce((q, x) => q + x.volume, 0), a3 = c.slice(-72).reduce((q, x) => q + x.volume, 0) / 3;
+        if (l24 > 0 && a3 > 0) { P.volPersist = a3 / l24; P.s.y0 *= clamp(0.5 + 0.5 * P.volPersist, 0.5, 1.2); P._yAdj = true; }
+      }
     } catch (e) { P.sigmaErr = e.message; }
   }
   if (o.sec !== false && !P.s.established) {
@@ -311,6 +345,8 @@ function detailHTML(P, ev) {
   let h = '<p class="hint">TVL ' + E.fmtUSD(P.s.tvl) + ' · volume 24 jam ' + E.fmtUSD(P.vol24) + ' · fee efektif ' + nf(P.feeEff, 2) + '% · bin step ' + P.s.binStep + ' · umur pool ' + nf(P.s.age, P.s.age < 10 ? 1 : 0) + ' hari</p>';
   h += '<div class="row"><div>' + chip(ev.label) + '</div><span class="num">Peluang kerugian parah 7 hari: <b>' + nf(ev.rk.p * 100, 1) + '%</b></span></div>';
   if (P.sigmaErr) h += '<p class="alert">Data harga gagal dibaca, gerak harga memakai perkiraan 12% per hari.</p>';
+  if (P.s.usdq) h += '<p class="note">Pool ini berpasangan dolar (USDC/USDT), sedangkan modalmu SOL. Semua angka di bawah sudah dihitung dalam SOL, jadi ikut menghitung risiko harga SOL naik-turun terhadap dolar.' + (P.noSol ? ' Data harga SOL gagal dibaca, jadi gerak SOL memakai perkiraan standar.' : '') + '</p>';
+  if (P.volPersist != null && P.volPersist < 0.8) h += '<p class="alert">Volume 24 jam terakhir jauh di atas rata-rata 3 hari (rata-rata 3 hari hanya ' + nf(P.volPersist * 100, 0) + '% dari 24 jam terakhir). Lonjakan seperti ini sering tidak bertahan. Perkiraan fee sudah dikurangi, tapi tetap hati-hati.</p>';
   if (ev.a.unknown.length) h += '<p class="alert">Belum terverifikasi: ' + esc(ev.a.unknown.map(u => u === 'top10' ? 'holder terbesar' : u === 'mint' ? 'mint authority' : 'freeze authority').join(', ')) + '. Dianggap berisiko. Cek manual di RugCheck.</p>';
   h += planHTML(ev, arm);
   h += '<h4>Aturan keluar (contoh)</h4><ul class="ex">' + E.EXITS[ev.label].map(t => '<li>' + esc(t) + '</li>').join('') + '</ul>';
@@ -359,15 +395,52 @@ async function backtestOne(addr) {
   try {
     let rec = curDetail && curDetail.P.addr === addr ? curDetail : null;
     const P = rec.P;
-    const c = await A.fetchCandles(P.addr, 244, S.settings.mode);
-    const r = E.backtestPool(P, c, S.learner, { cap: capital(), appetite: S.settings.appetite });
+    const rs = await Promise.all([A.fetchCandles(P.addr, 244, S.settings.mode), P.s.usdq ? getSolRef() : null]);
+    const c = rs[0], sr = rs[1];
+    const r = E.backtestPool(P, c, S.learner, { cap: capital(), appetite: S.settings.appetite, solCandles: sr && sr.candles });
     if (!r) { out.innerHTML = '<p class="alert">Data harga kurang dari 8 hari untuk pool ini.</p>'; return; }
     save();
     out.innerHTML = '<h4>Hasil uji mundur (7 hari terakhir, harga nyata)</h4><div class="tblwrap"><table><thead><tr><th>Strategi</th><th>Perkiraan</th><th>Nyata</th></tr></thead><tbody>' +
       r.ev.arms.map((a, j) => '<tr><td>' + E.STRATS[a.strat].name + ' ' + (a.strat === 'bidask' ? '-' : '±') + a.plan.half + '%</td><td>' + pct(a.sim.mean) + '</td><td class="' + sg(r.nets[j]) + '"><b>' + pct(r.nets[j]) + '</b></td></tr>').join('') + '</tbody></table></div>' +
-      '<p class="hint">Harga akhir ' + pct(r.pEnd - 1) + ' dari harga awal. Fee dihitung dari volume per jam dan TVL sekarang, jadi ini perkiraan. Hasilnya sudah dipelajari.</p>';
+      '<p class="hint">Harga akhir ' + pct(r.pEnd - 1) + ' dari harga awal.' + (P.s.usdq ? (r.noSol ? ' Harga SOL tidak terbaca, hasil ini belum memperhitungkan gerak SOL.' : ' Dalam jendela yang sama harga SOL berubah ' + pct(r.solR - 1) + ' terhadap dolar, dan itu sudah dihitung.') : '') + ' Fee dihitung dari volume per jam dan TVL sekarang, jadi ini perkiraan. Hasilnya sudah dipelajari.</p>';
     toast('Uji mundur selesai dan dipelajari.');
   } catch (e) { out.innerHTML = '<p class="alert">Gagal: ' + esc(e.message) + '</p>'; }
+}
+
+
+/* ---------- latihan di LP Army: pool, strategi, dan lebar dicatat, hasil dibandingkan dengan perkiraan ---------- */
+function knownPools() {
+  const m = new Map();
+  if (scanRes) scanRes.items.forEach(r => m.set(r.P.addr, r.P.name));
+  else if (S.lastScan) S.lastScan.items.forEach(i => m.set(i.addr, i.name));
+  return Array.from(m.entries());
+}
+function practiceHTML() {
+  const pl = knownPools();
+  let h = '<div class="panel"><h3>Latihan di LP Army</h3><p class="note">Buka posisi latihan di LP Army, lalu catat di sini pool, strategi, dan lebar rentangnya. Aplikasi menghitung perkiraan untuk persis pilihan itu. Setelah minimal 5 hari (idealnya 7), kamu tutup posisinya dan masukkan hasilnya. Selisih perkiraan dan hasil nyata itulah yang dipelajari.</p>' +
+    '<a class="btn" href="https://www.lparmy.com/playground" target="_blank" rel="noopener">Buka LP Army Playground</a>' +
+    '<label class="f"><span class="lab">Pool (dari hasil pemindaian)</span><select id="pr-pool"><option value="">' + (pl.length ? 'Pilih pool' : 'Belum ada hasil pemindaian') + '</option>' + pl.map(x => '<option value="' + esc(x[0]) + '">' + esc(x[1]) + '</option>').join('') + '</select></label>' +
+    '<label class="f"><span class="lab">Atau tempel alamat pool (dari alamat web Meteora)</span><input id="pr-addr" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Kosongkan kalau sudah memilih di atas"></label>' +
+    '<div class="grid"><label class="f"><span class="lab">Strategi</span><select id="pr-strat">' + Object.keys(E.STRATS).map(k => '<option value="' + k + '">' + E.STRATS[k].name + '</option>').join('') + '</select></label>' +
+    '<label class="f"><span class="lab">Lebar rentang (%)</span><input id="pr-half" type="text" inputmode="decimal" autocomplete="off" placeholder="mis. 6 untuk ±6%"></label></div>' +
+    '<p class="hint">Curve dan Spot: isi setengah lebar (6 untuk -6% sampai +6%). Bid-Ask: isi berapa persen ke bawah (mis. 40 untuk -40% sampai 0%).</p>' +
+    '<label class="f"><span class="lab">Sudah dibuka berapa jam yang lalu? (kosongkan kalau baru)</span><input id="pr-ago" type="text" inputmode="decimal" autocomplete="off" placeholder="mis. 12"></label>' +
+    '<button class="btn primary" data-act="prac-start">Catat posisi latihan</button></div>';
+  return h + '<div id="prac-lists">' + pracLists() + '</div>';
+}
+function pracLists() {
+  const op = S.practice.filter(x => x.status === 'open'), dn = S.practice.filter(x => x.status === 'done').slice(-5).reverse();
+  let h = '<h4>Posisi latihan berjalan</h4>';
+  if (!op.length) h += '<p class="note">Belum ada.</p>';
+  else h += '<ul class="rows">' + op.slice().reverse().map(x => {
+    const d = (Date.now() - x.t0) / 864e5;
+    return '<li class="fr3"><div class="row"><div><b>' + esc(x.name) + '</b><div class="hint">' + esc(E.STRATS[x.strat].name) + ' ' + (x.strat === 'bidask' ? '-' + x.half + '% s/d 0%' : '±' + x.half + '%') + ' · hari ke-' + nf(Math.floor(d) + 1, 0) + ' dari 7</div></div>' +
+      '<div class="right"><div class="hint">perkiraan rata-rata</div><b class="num ' + sg(x.mean) + '">' + pct(x.mean) + '</b></div></div>' +
+      '<div class="hint">Skenario buruk ' + pct(x.p10, 0) + ' · peluang untung ' + nf(x.win * 100, 0) + '%' + (d < 5 ? ' · tutup posisi di LP Army setelah hari ke-5' : '') + '</div>' +
+      '<div class="row2"><input id="pc-' + x.id + '" type="text" inputmode="decimal" autocomplete="off" placeholder="Hasil akhir (%)" aria-label="Hasil akhir dalam persen"><button class="btn small" data-act="prac-close" data-id="' + x.id + '">Catat hasil</button><button class="btn small ghost" data-act="prac-del" data-id="' + x.id + '">Hapus</button></div></li>';
+  }).join('') + '</ul>';
+  if (dn.length) h += '<h4>Latihan selesai</h4><ul class="rows">' + dn.map(x => '<li class="fr2"><div><b>' + esc(x.name) + '</b><div class="hint">' + esc(E.STRATS[x.strat].name) + ' ' + (x.strat === 'bidask' ? '-' + x.half + '%' : '±' + x.half + '%') + ' · perkiraan ' + pct(x.mean) + '</div></div><div class="right"><b class="num ' + sg(x.real) + '">' + pct(x.real) + '</b><div class="hint">selisih ' + pct(x.real - x.mean) + '</div></div></li>').join('') + '</ul>';
+  return h;
 }
 
 /* ---------- PLAYGROUND ---------- */
@@ -379,16 +452,11 @@ function renderPlay() {
   h += '<div class="panel"><h3>Latih otomatis</h3><p class="note">Setiap putaran: pool acak dengan sifat tersembunyi (termasuk rug), aplikasi memilih strategi, lalu 7 hari disimulasikan.</p>' +
     '<div class="chips sm" role="group" aria-label="Jumlah putaran"><button class="btn small" data-act="train" data-n="100">100 putaran</button><button class="btn small" data-act="train" data-n="300">300 putaran</button><button class="btn small" data-act="train" data-n="1000">1.000 putaran</button></div>' +
     '<div class="prog" id="train-prog" hidden><i id="train-bar"></i></div><button class="btn small ghost" data-act="train-stop" id="train-stop" hidden>Hentikan</button><div id="train-out"></div></div>';
-  h += '<div class="panel"><h3>Latihan di LP Army</h3><p class="note">LP Army adalah simulator tanpa uang asli. Berlatih di sana, lalu catat hasilnya di sini supaya ikut dipelajari (bobot kecil).</p>' +
-    '<a class="btn" href="https://www.lparmy.com/playground" target="_blank" rel="noopener">Buka LP Army Playground</a>' +
-    '<div class="grid"><label class="f"><span class="lab">Jenis pool</span><select id="pr-kind">' + Object.keys(E.PRACTICE).map(k => '<option value="' + k + '">' + esc(E.PRACTICE[k].label) + '</option>').join('') + '</select></label>' +
-    '<label class="f"><span class="lab">Strategi</span><select id="pr-strat">' + Object.keys(E.STRATS).map(k => '<option value="' + k + '">' + E.STRATS[k].name + '</option>').join('') + '</select></label></div>' +
-    '<label class="f"><span class="lab">Hasil latihan (%)</span><input id="pr-res" type="text" inputmode="decimal" autocomplete="off" placeholder="mis. -8 atau 12,5"></label>' +
-    '<button class="btn" data-act="prac-save">Catat hasil latihan</button><p class="hint">Hanya jenis pool, strategi, dan hasil yang dicatat. Lebih baik catat setelah kira-kira 7 hari waktu simulasi, sama dengan horizon aplikasi.</p></div>';
+  h += practiceHTML();
   h += '<div class="panel"><h3>Satu putaran, dijelaskan</h3><p class="note">Lihat satu contoh dari awal sampai akhir, lalu kebenaran tersembunyinya dibuka.</p><button class="btn" data-act="one">Mainkan 1 putaran</button><div id="one-out"></div></div>';
   h += '<div class="panel"><h3>Uji mundur data nyata</h3><p class="note">Mengambil pool nyata dan harga per jam 7 hari terakhir, lalu menghitung apa yang akan terjadi kalau semua strategi dipakai saat itu. Perlu koneksi ke Meteora.</p><button class="btn" data-act="bt-all">Uji mundur sampai 15 pool</button><div class="prog" id="bt-prog" hidden><i id="bt-bar"></i></div><div id="bt-all-out"></div>' +
     '<p class="hint">Catatan: pool yang sudah rug biasanya hilang dari daftar, jadi hasil ini sedikit terlalu optimis.</p></div>';
-  h += '<p class="hint">Sampel dipelajari: playground ' + c.sim + ' · data nyata ' + c.bt + ' · trade kamu ' + c.real + '.</p>';
+  h += '<p class="hint">Sampel dipelajari: playground ' + c.sim + ' · data nyata ' + c.bt + ' · latihan ' + (c.prac || 0) + ' · trade kamu ' + c.real + '.</p>';
   $('play-body').innerHTML = h;
 }
 async function doTrain(n) {
@@ -431,10 +499,11 @@ async function doBtAll() {
     let pools = scanRes ? scanRes.items.map(r => r.P) : await A.fetchPools({ minTvl: S.settings.minTvl }, S.settings.mode);
     pools = pools.filter(P => !P.s.established || P.s.tvl > 0).slice().sort((a, b) => b.vol24 - a.vol24).slice(0, 15);
     let done = 0, pol = 0, all = 0, used = 0, severe = 0, fail = 0;
+    const sr = await getSolRef(pools);
     await pmap(pools, 3, async P => {
       try {
         const c = await A.fetchCandles(P.addr, 244, S.settings.mode);
-        const r = E.backtestPool(P, c, S.learner, { cap: 1, appetite: S.settings.appetite });
+        const r = E.backtestPool(P, c, S.learner, { cap: 1, appetite: S.settings.appetite, solCandles: sr && sr.candles });
         if (r) { used++; pol += r.policy; all += r.meanAll; if (r.severe) severe++; } else fail++;
       } catch (e) { fail++; }
       done++; $('bt-bar').style.width = (done / pools.length * 100) + '%';
@@ -449,10 +518,10 @@ async function doBtAll() {
 /* ---------- BELAJAR ---------- */
 const SIGL = { L: 'harga tenang', M: 'harga sedang', H: 'harga liar' };
 function renderLearn() {
-  const L = S.learner, c = L.counts, wt = c.sim * E.WSRC.sim + c.bt * E.WSRC.bt + c.real * E.WSRC.real;
+  const L = S.learner, c = L.counts, wt = c.sim * E.WSRC.sim + c.bt * E.WSRC.bt + (c.prac || 0) * E.WSRC.prac + c.real * E.WSRC.real;
   const conf = wt < 8 ? 'masih sangat sedikit' : wt < 30 ? 'masih sedikit' : wt < 100 ? 'mulai berarti' : 'cukup banyak';
   let h = '<div class="panel"><h3>Seberapa banyak yang dipelajari</h3><div class="stats3"><div><span class="k">Playground</span><b class="num">' + c.sim + '</b></div><div><span class="k">Data nyata</span><b class="num">' + c.bt + '</b></div><div><span class="k">Latihan</span><b class="num">' + (c.prac || 0) + '</b></div><div><span class="k">Trade kamu</span><b class="num">' + c.real + '</b></div></div>' +
-    '<p class="note">Bobot belajar total ' + nf(wt, 1) + ': ' + conf + '. Satu trade nyata berbobot ' + nf(E.WSRC.real / E.WSRC.sim, 0) + ' kali satu putaran playground.</p></div>';
+    '<p class="note">Bobot belajar total ' + nf(wt, 1) + ': ' + conf + '. Satu trade nyata berbobot ' + nf(E.WSRC.real / E.WSRC.sim, 0) + ' kali satu putaran playground.</p><button class="btn small" data-act="how">Cara kerja aplikasi ini</button></div>';
   const err = L.hist.filter(x => !(x.pred === 0 && x.real === 0)).map(x => Math.abs(x.real - x.pred));
   const roll = []; for (let i = 0; i < err.length; i++) { const a = err.slice(Math.max(0, i - 29), i + 1); roll.push(E.avg(a)); }
   h += '<h4>Selisih perkiraan dan hasil</h4>' + lineSVG(roll.slice(-200), 'Rata-rata selisih perkiraan dan hasil') + '<p class="hint">Rata-rata 30 sampel terakhir. Makin rendah makin akurat. Naik-turun wajar di awal.</p>';
@@ -496,6 +565,51 @@ async function netTest() {
   o.innerHTML = '<ul class="rows">' + rows.map(r => '<li class="fr"><span class="fn">' + esc(r[0]) + '</span><span></span><span class="pill ' + (r[1] === 'ok' ? 'ok' : r[1]) + '">' + (r[1] === 'ok' ? 'Baik' : r[1] === 'warn' ? 'Cek' : 'Gagal') + '</span><span class="fnote">' + esc(r[2]) + '</span></li>').join('') + '</ul>';
 }
 
+
+/* ---------- penjelasan cara kerja ---------- */
+function howHTML() {
+  return '' +
+  '<p class="note">Halaman ini menjelaskan apa yang dihitung aplikasi, dari mana angkanya datang, dan apa yang tidak diketahuinya. Tujuannya supaya kamu bisa menilai sendiri kapan angkanya layak dipercaya.</p>' +
+  '<h4>1. Alur satu pemindaian</h4><ul class="ex">' +
+  '<li><b>Ambil pool.</b> Daftar pool Meteora dengan TVL dan volume yang cukup.</li>' +
+  '<li><b>Baca harga.</b> Harga per jam 3 hari terakhir tiap pool, untuk mengukur seberapa liar harganya (gerak harian). Dari situ juga dicek apakah volume 24 jam terakhir hanya lonjakan dibanding rata-rata 3 hari. Kalau ya, perkiraan fee dikurangi.</li>' +
+  '<li><b>Cek keamanan.</b> Untuk token yang belum mapan: mint authority, freeze authority, dan seberapa terpusat 10 holder terbesar (lewat RPC).</li>' +
+  '<li><b>Nilai risiko.</b> Skor aturan (TVL, umur pool, holder, mint/freeze, gerak harga, volume) diubah menjadi peluang kerugian parah dalam 7 hari. Angka itu lalu dikoreksi dari pengalaman aplikasi.</li>' +
+  '<li><b>Simulasi 9 strategi.</b> Curve, Spot, dan Bid-Ask, masing-masing dengan 3 lebar rentang. Tiap strategi dijalankan di ratusan jalur harga acak 7 hari.</li>' +
+  '<li><b>Pilih atau tolak.</b> Strategi dengan skor terbaik (rata-rata hasil dikurangi hukuman untuk skenario buruk) menjadi saran. Kalau risikonya terlalu tinggi atau tidak ada yang rata-ratanya positif, aplikasinya bilang tahan SOL.</li></ul>' +
+  '<h4>2. Cara aplikasi menghitung hasil satu posisi</h4><ul class="ex">' +
+  '<li><b>Nilai posisi.</b> Dihitung bin demi bin seperti di Meteora. Kalau harga naik melewati sebuah bin, isinya berubah jadi aset pasangan. Kalau turun, jadi token. Inilah sumber rugi karena harga bergerak (impermanent loss).</li>' +
+  '<li><b>Fee.</b> Dasarnya fee harian dibagi TVL pool. Fee itu dikali seberapa tebal likuiditasmu di harga saat itu dan seberapa sempit rentangmu. Kalau harga keluar dari rentang, fee nol.</li>' +
+  '<li><b>Bentuk strategi.</b> Spot membagi modal rata. Curve menumpuk modal di tengah, jadi fee besar kalau harga tenang tapi hilang cepat kalau harga lari. Bid-Ask di aplikasi ini satu sisi di bawah harga: kamu membeli token pelan-pelan saat harga turun.</li>' +
+  '<li><b>Semua hasil dalam SOL.</b> Modalmu SOL, jadi untung-rugi dinyatakan dalam SOL. Di pool berpasangan SOL, itu langsung. Di pool berpasangan USDC/USDT, hasil dolarnya dibagi perubahan harga SOL, jadi kalau SOL naik 10% saat kamu memegang USDC, itu dihitung sebagai rugi.</li></ul>' +
+  '<h4>3. Cara membaca angka di kartu</h4><ul class="ex">' +
+  '<li><b>Rendah / Sedang / Tinggi / Hindari.</b> Dari peluang kerugian parah (lebih dari separuh modal) dalam 7 hari. Rendah di bawah 1%, Sedang sampai 4%, Tinggi sampai 12%, Hindari di atasnya atau kalau ada tanda bahaya keras.</li>' +
+  '<li><b>Rata-rata 7 hari.</b> Rata-rata hasil di semua jalur simulasi, sudah dikoreksi pengalaman. Ini bukan janji. Satu posisi nyata bisa jauh di atas atau di bawah.</li>' +
+  '<li><b>Skenario buruk.</b> Hasil pada jalur terburuk ke-10 persen. Satu dari sepuluh kali, hasilnya sama buruk atau lebih buruk dari angka ini.</li>' +
+  '<li><b>Peluang untung.</b> Bagian jalur simulasi yang berakhir di atas nol setelah fee.</li>' +
+  '<li><b>Pasang / Sisakan.</b> Besar posisi mengikuti risiko: pool Rendah boleh hampir seluruh modal, Sedang sekitar separuh, Tinggi sedikit sekali. Selalu ada sisa untuk biaya transaksi.</li></ul>' +
+  '<h4>4. Dari mana aplikasi belajar</h4><ul class="ex">' +
+  '<li><b>Playground otomatis (bobot 0,15).</b> Dunia buatan dengan pool acak dan sifat tersembunyi, termasuk rug. Melatih kebiasaan menolak yang berbahaya. Dunianya dibuat pembuat aplikasi, jadi bukan bukti untung di pasar nyata.</li>' +
+  '<li><b>Uji mundur data nyata (0,25).</b> Memainkan semua strategi pada harga nyata 7 hari terakhir. Memakai TVL dan volume sekarang, dan pool yang sudah rug biasanya sudah hilang dari daftar, jadi sedikit terlalu optimis.</li>' +
+  '<li><b>Latihan LP Army (0,3).</b> Kamu mencatat pool, strategi, dan lebar. Setelah 5 sampai 7 hari kamu masukkan hasilnya, lalu aplikasi membandingkannya dengan perkiraannya.</li>' +
+  '<li><b>Trade nyatamu (1,0).</b> Paling berat, karena inilah satu-satunya yang menyertakan biaya, selip harga, dan perilaku pool yang sebenarnya.</li></ul>' +
+  '<p class="note">Yang dipelajari ada dua: koreksi untuk tiap strategi di tiap situasi (hasil sebenarnya lebih baik atau lebih buruk dari hitungan), dan bobot faktor risiko (mis. apakah TVL kecil ternyata lebih berbahaya dari dugaan awal). Semuanya terlihat di tab Belajar. Kalau cara hitung aplikasi diubah, hasil belajar lama direset karena angkanya tidak sebanding.</p>' +
+  '<h4>5. Hal yang tidak diketahui aplikasi</h4><ul class="ex">' +
+  '<li>Fee masa depan. Dipakai volume 24 jam dan 3 hari terakhir, dan volume bisa turun tajam.</li>' +
+  '<li>Rug dalam hitungan jam, bocoran informasi, atau dompet pengembang yang mulai menjual. Aplikasi hanya melihat tanda-tandanya (mint, freeze, holder, umur).</li>' +
+  '<li>Token yang punya penerbit atau pengelola, misalnya saham tokenisasi (NVDAx dan sejenisnya). Harganya mengikuti jam bursa dan penerbit bisa membekukan. Aplikasi memperlakukannya seperti token mapan biasa, jadi risikonya bisa lebih besar dari yang ditunjukkan.</li>' +
+  '<li>Likuiditas LP lain di tiap bin. Fee dihitung secara rata-rata, bukan bin demi bin.</li>' +
+  '<li>Biaya transaksi, selip saat swap, dan sewa akun posisi di Meteora.</li></ul>' +
+  '<h4>6. Cara memakainya supaya kerugian kecil</h4><ul class="ex">' +
+  '<li>Latihan dulu: Latih otomatis, Uji mundur, lalu beberapa posisi latihan di LP Army dengan pool dan lebar yang berbeda. Lihat apakah selisih perkiraan dan hasil mengecil.</li>' +
+  '<li>Kalau pindah ke uang sungguhan, mulai dari 0,05 sampai 0,1 SOL di satu pool berlabel Rendah, dan jangan menambah sebelum 3 posisi berturut-turut selesai.</li>' +
+  '<li>Jangan pasang uang yang tidak sanggup hilang. Skenario buruk di kartu itu bisa terjadi.</li>' +
+  '<li>Patuhi aturan keluar di kartu. Tutup posisi saat batas rugi tercapai, jangan menunggu pulih.</li>' +
+  '<li>Kalau aplikasi bilang tahan SOL, itu keputusan yang sah. Tidak masuk juga hasil.</li>' +
+  '<li>Cek manual token yang belum terverifikasi di RugCheck sebelum menaruh uang, dan jangan pernah memasukkan seed phrase atau private key ke aplikasi apa pun.</li></ul>' +
+  '<p class="hint">Aplikasi ini model sederhana, bukan saran keuangan. Hasil nyata bisa jauh berbeda, termasuk kehilangan seluruh modal.</p>';
+}
+
 /* ---------- aksi ---------- */
 const ACT = {
   nav: b => go(b.dataset.v),
@@ -522,14 +636,41 @@ const ACT = {
     if (!isFinite(v)) { toast('Isi hasil akhir dalam persen, mis. -12 atau 8,5.'); return; }
     closeTracked(t, v / 100, 'manual'); renderHome();
   },
-  'prac-save': () => {
-    const v = numIn('pr-res');
-    if (!isFinite(v) || v < -100 || v > 1000) { toast('Isi hasil dalam persen antara -100 dan 1000.'); return; }
-    const r = E.learnPractice(S.learner, $('pr-kind').value, $('pr-strat').value, v / 100, S.settings.appetite);
-    if (!r) { toast('Gagal mencatat.'); return; }
-    save(); renderPlay(); renderHome();
-    toast('Dipelajari. Perkiraan aplikasi ' + pct(r.pred) + ', hasil latihanmu ' + pct(v / 100) + '.');
+  'prac-start': async b => {
+    if (busy) { toast('Masih ada proses berjalan.'); return; }
+    const addr = (($('pr-addr').value || '').trim()) || $('pr-pool').value;
+    if (!A.validAddr(addr)) { toast('Pilih pool dari daftar, atau tempel alamat pool yang valid.'); return; }
+    const half = numIn('pr-half');
+    if (!(half >= 2 && half <= 90)) { toast('Isi lebar rentang antara 2 dan 90 (%).'); return; }
+    const strat = $('pr-strat').value, ago = numIn('pr-ago');
+    busy = true; b.disabled = true; b.textContent = 'Menghitung…';
+    try {
+      let P = scanRes && (scanRes.items.find(r => r.P.addr === addr) || {}).P;
+      if (!P) { P = await A.fetchPool(addr, S.settings.mode); if (!P) throw new Error('Pool tidak ditemukan.'); await enrich(P); }
+      const r = E.evalCustom(P.s, S.learner, strat, half, { cap: 1, appetite: S.settings.appetite });
+      S.practice.push({
+        id: 'p' + Date.now().toString(36), addr: P.addr, name: P.name, strat, half: r.plan.half, status: 'open',
+        t0: Date.now() - (isFinite(ago) && ago > 0 ? Math.min(ago, 720) : 0) * 36e5,
+        snap: r.snap, mean: r.mean, p10: r.p10, win: r.sim.pWin, label: r.ev.label
+      });
+      save(); busy = false; renderPlay();
+      toast('Dicatat. Perkiraan aplikasi untuk ' + P.name + ': ' + pct(r.mean) + ' dalam 7 hari.');
+    } catch (e) { busy = false; renderPlay(); toast('Gagal: ' + e.message); }
   },
+  'prac-close': b => {
+    const x = S.practice.find(q => q.id === b.dataset.id); if (!x) return;
+    const v = numIn('pc-' + x.id);
+    if (!isFinite(v) || v < -100 || v > 1000) { toast('Isi hasil akhir dalam persen antara -100 dan 1000.'); return; }
+    const d = (Date.now() - x.t0) / 864e5;
+    if (d < 5) { toast('Baru ' + nf(d, 1) + ' hari. Tunggu minimal 5 hari supaya sebanding dengan perkiraan 7 hari, atau hapus catatannya.'); return; }
+    E.learnPracticeSnap(S.learner, x.snap, v / 100);
+    x.status = 'done'; x.real = v / 100; x.closedAt = Date.now();
+    save(); renderPlay(); renderHome();
+    toast('Dipelajari. Perkiraan ' + pct(x.mean) + ', hasil latihanmu ' + pct(v / 100) + '.');
+  },
+  'prac-del': b => { S.practice = S.practice.filter(q => q.id !== b.dataset.id); save(); renderPlay(); },
+  how: () => openSheet('Cara kerja aplikasi', howHTML()),
+  'notice-ok': () => { delete S.notice; save(); renderHome(); },
   auto: b => { S.settings.autoTrain = b.dataset.k === '1'; save(); renderSet(); if (S.settings.autoTrain) autoLearn(); },
   'tracked-del': b => { S.tracked = S.tracked.filter(x => x.id !== b.dataset.id); save(); renderHome(); },
   'set-save': () => {
@@ -598,7 +739,8 @@ async function autoLearn() {
         const base = scanRes ? scanRes.items.map(r => r.P) : await A.fetchPools({ minTvl: S.settings.minTvl }, S.settings.mode);
         const pools = base.slice().sort((a, b) => b.vol24 - a.vol24).slice(0, 8);
         let ok = 0;
-        await pmap(pools, 3, async P => { const c = await A.fetchCandles(P.addr, 244, S.settings.mode); if (E.backtestPool(P, c, S.learner, { cap: 1, appetite: S.settings.appetite })) ok++; });
+        const sr = await getSolRef(base);
+        await pmap(pools, 3, async P => { const c = await A.fetchCandles(P.addr, 244, S.settings.mode); if (E.backtestPool(P, c, S.learner, { cap: 1, appetite: S.settings.appetite, solCandles: sr && sr.candles })) ok++; });
         if (ok) S.autoBt = Date.now();
       } catch (e) { }
     }
@@ -609,7 +751,13 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) setT
 
 function renderAll() { renderHome(); renderPools(); renderPlay(); renderLearn(); renderSet(); }
 // render Belajar saat dibuka agar selalu terbaru
-const _go = go; go = function (v) { _go(v); if (v === 'learn') renderLearn(); if (v === 'home') renderHome(); if (v === 'pools' && !busy) renderPools(); };
+function refreshPracPools() {
+  const el = $('pr-pool'); if (!el) return;
+  const pl = knownPools(), cur = el.value;
+  el.innerHTML = '<option value="">' + (pl.length ? 'Pilih pool' : 'Belum ada hasil pemindaian') + '</option>' + pl.map(x => '<option value="' + esc(x[0]) + '">' + esc(x[1]) + '</option>').join('');
+  el.value = cur;
+}
+const _go = go; go = function (v) { _go(v); if (v === 'learn') renderLearn(); if (v === 'home') renderHome(); if (v === 'pools' && !busy) renderPools(); if (v === 'play') { refreshPracPools(); const pl = $('prac-lists'); if (pl) pl.innerHTML = pracLists(); } };
 
 if ('serviceWorker' in navigator && location.protocol === 'https:') { navigator.serviceWorker.register('sw.js').catch(() => { }); }
 renderAll(); go('home'); setTimeout(autoLearn, 1500);

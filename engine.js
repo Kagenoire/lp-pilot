@@ -50,14 +50,54 @@ const EXITS = {
 };
 const FEAT_NAMES = ['TVL kecil', 'Token muda', 'Holder terpusat', 'Mint aktif atau belum dicek', 'Freeze aktif', 'Harga liar', 'Volume ramai dibanding TVL', 'Token mapan'];
 
-/* ---------- matematika posisi (likuiditas terkonsentrasi) ---------- */
-function makeVal(pl, ph) {
-  const sl = Math.sqrt(pl), sh = Math.sqrt(ph);
-  const x = p => p <= pl ? (1 / sl - 1 / sh) : p >= ph ? 0 : (1 / Math.sqrt(p) - 1 / sh);
-  const y = p => p <= pl ? 0 : p >= ph ? (sh - sl) : (Math.sqrt(p) - sl);
-  const val = p => x(p) * p + y(p);
-  const V0 = val(1), x0 = x(1), y0 = y(1);
-  return { val: p => val(p) / V0, hodl: p => (x0 * p + y0) / V0 };
+/* ---------- matematika posisi: bin bertipe jumlah-tetap seperti DLMM ---------- */
+const MV = 2;                 // versi model. Kalau berubah, pengalaman lama direset karena angkanya tidak sebanding.
+const NB = 40;                // jumlah bin hitung (bukan jumlah bin asli di Meteora)
+const SOL_SIGMA = 4.5;        // gerak harian SOL terhadap dolar (persen), dipakai kalau data SOL tidak tersedia
+const SOL_RHO = 0.5;          // keterkaitan token alt dengan SOL
+/* bobot modal per bin (naik harga). Jumlah = 1. */
+function shapeW(strat, nb) {
+  const w = new Array(nb);
+  let t = 0;
+  for (let i = 0; i < nb; i++) {
+    if (strat === 'curve') { const u = (i + 0.5) / nb * 2 - 1; w[i] = 0.06 + (1 - Math.abs(u)); }
+    else if (strat === 'bidask') { const d = (nb - i - 0.5) / nb; w[i] = 0.25 + d; }   // satu sisi di bawah harga: makin jauh makin tebal
+    else w[i] = 1;
+    t += w[i];
+  }
+  return w.map(x => x / t);
+}
+/* Posisi dimodelkan bin demi bin. Bin di atas harga awal berisi token, di bawah berisi aset pasangan.
+   Nilai saat harga P (modal awal = 1): semua bin yang sudah dilewati naik berisi aset pasangan, sisanya berisi token. */
+function makeVal(pl, ph, strat) {
+  const nb = NB, lpl = Math.log(pl), D = (Math.log(ph) - lpl) / nb;
+  const w = shapeW(strat || 'spot', nb);
+  const pc = new Array(nb), c = new Array(nb), cum = new Array(nb + 1), tail = new Array(nb + 1);
+  let xh = 0, yh = 0;
+  for (let i = 0; i < nb; i++) {
+    pc[i] = Math.exp(lpl + (i + 0.5) * D);
+    c[i] = pc[i] > 1 ? w[i] * pc[i] : w[i];
+    if (pc[i] > 1) xh += w[i]; else yh += w[i];            // xh: jumlah token (satuan harga 1), yh: aset pasangan
+  }
+  cum[0] = 0; for (let i = 0; i < nb; i++) cum[i + 1] = cum[i] + c[i];
+  tail[nb] = 0; for (let i = nb - 1; i >= 0; i--) tail[i] = tail[i + 1] + c[i] / pc[i];
+  const idxOf = lp => clamp(Math.floor((lp - lpl) / D - 0.5) + 1, 0, nb);
+  const val = P => { const k = idxOf(Math.log(P)); return cum[k] + P * tail[k]; };
+  const hodl = P => xh * P + yh;
+  const binOf = lp => Math.floor((lp - lpl) / D);
+  const multLn = lp => { const i = binOf(lp); return i < 0 || i >= nb ? 0 : w[i] * nb; };
+  /* rata-rata kepadatan likuiditas di sepanjang pergerakan harga dari log-harga a ke b (0 di luar rentang) */
+  const mavg = (a, b) => {
+    if (a > b) { const t = a; a = b; b = t; }
+    if (b - a < 1e-9) return multLn((a + b) / 2);
+    const lo = Math.max(a, lpl), hi = Math.min(b, lpl + nb * D);
+    if (hi <= lo) return 0;
+    const i0 = clamp(Math.floor((lo - lpl) / D), 0, nb - 1), i1 = clamp(Math.floor((hi - lpl) / D - 1e-12), 0, nb - 1);
+    let s = 0;
+    for (let i = i0; i <= i1; i++) s += w[i] * nb * (Math.min(hi, lpl + (i + 1) * D) - Math.max(lo, lpl + i * D));
+    return s / (b - a);
+  };
+  return { val, hodl, multLn, mavg, w, nb };
 }
 // nilai posisi relatif terhadap modal, diukur dalam aset pasangan (quote) atau aset utama (base)
 const valueAt = (V, p, base) => base ? V.val(p) / p : V.val(p);
@@ -120,9 +160,10 @@ const labelOf = (p, hard) => (hard || p > 0.12) ? 'hindari' : p > 0.04 ? 'tinggi
 const bucketOf = (label, sigma) => label + '|' + (sigma <= 5 ? 'L' : sigma <= 15 ? 'M' : 'H');
 
 /* ---------- pembelajaran ---------- */
-function newLearner() { return { w: new Array(FEAT_NAMES.length).fill(0), b: 0, arms: {}, counts: { sim: 0, bt: 0, real: 0, prac: 0 }, hist: [] }; }
+function newLearner() { return { mv: MV, w: new Array(FEAT_NAMES.length).fill(0), b: 0, arms: {}, counts: { sim: 0, bt: 0, real: 0, prac: 0 }, hist: [] }; }
 function fixLearner(L) {
   if (!L || typeof L !== 'object') return newLearner();
+  if (L.mv !== MV) return newLearner();          // model berubah, angka lama tidak sebanding
   const n = newLearner();
   L.w = Array.isArray(L.w) ? n.w.map((_, i) => (isFinite(L.w[i]) ? L.w[i] : 0)) : n.w;
   L.b = isFinite(L.b) ? L.b : 0;
@@ -168,12 +209,12 @@ function pushHist(L, h) { L.hist.push(h); if (L.hist.length > 600) L.hist.splice
 function riskWeights(L) { return FEAT_NAMES.map((n, i) => ({ name: n, w: L.w[i] })); }
 
 /* ---------- rencana posisi ---------- */
-function planFor(s, label, strat, wm, cap, app) {
+function planFor(s, label, strat, wm, cap, app, halfOv) {
   const sig = s.sigma;
-  const defHalf = strat === 'bidask' ? 50 : clamp(Math.round(sig * Math.sqrt(7) * 1.5), 6, 40);
-  let half = Math.round(defHalf * wm), pl, ph;
-  if (strat === 'bidask') { half = clamp(half, 10, 80); pl = 1 - half / 100; ph = 1; }
-  else { half = clamp(half, 5, 50); pl = 1 - half / 100; ph = 1 + half / 100; }
+  const defHalf = strat === 'bidask' ? clamp(Math.round(sig * Math.sqrt(7) * 2), 12, 60) : clamp(Math.round(sig * Math.sqrt(7) * 1.5), 6, 40);
+  let half = halfOv != null ? Math.round(halfOv) : Math.round(defHalf * wm), pl, ph;
+  if (strat === 'bidask') { half = clamp(half, 3, 90); pl = 1 - half / 100; ph = 1; }
+  else { half = clamp(half, 2, 60); pl = 1 - half / 100; ph = 1 + half / 100; }
   const reserve0 = Math.min(0.1, cap * 0.2);
   const mul = (APP[app] || APP.seimbang).allocMul;
   const alloc = Math.floor(Math.max(0, cap - reserve0) * Math.min(1, ALLOC[label] * mul) * 100) / 100;
@@ -191,23 +232,28 @@ function simulate(s, pn, pool, o) {
   const mu = (-0.5 * Math.pow(s.sigma / 100, 2) + drift) / spd;
   const k = concK(pn);
   const dec = s.age < 3 ? 0.75 : s.age < 14 ? 0.85 : s.age < 60 ? 0.95 : 1;
-  const V = makeVal(pn.pl, pn.ph);
+  const V = makeVal(pn.pl, pn.ph, pn.strat);
   const base = s.measure === 'base';
+  const usd = !!s.usdq;                                   // nilai dalam dolar, dikonversi ke SOL di akhir
+  const sigS = (s.solSigma || SOL_SIGMA) / 100, sdS = sigS / Math.sqrt(spd), muS = -0.5 * sigS * sigS / spd, rho = SOL_RHO, rho2 = Math.sqrt(1 - rho * rho);
   const r = rng(o.seed || 20261022);
   const y0 = Math.min(pool.y0, 0.1);
   const rug = o.rug || 0;
   const net = new Array(N), hist = new Array(16).fill(0);
   let feeSum = 0, win = 0, loss20 = 0, sum = 0;
   for (let n = 0; n < N; n++) {
-    let lp = 0, fee = 0;
+    let lp = 0, ls = 0, fee = 0;
     for (let t = 0; t < T; t++) {
       const m = r() < 0.05 ? 2.5 : 1;
-      lp += mu + sd * gauss(r) * m;
+      const z = gauss(r);
+      lp += mu + sd * z * m;
+      if (usd) ls += muS + sdS * (rho * z + rho2 * gauss(r));
       const p = Math.exp(lp);
-      if (p >= pn.pl && p <= pn.ph) fee += y0 * Math.pow(dec, Math.floor(t / spd)) * k / spd;
+      if (p >= pn.pl && p <= pn.ph) fee += y0 * Math.pow(dec, Math.floor(t / spd)) * k * V.multLn(lp) / spd;
     }
     let x = valueAt(V, Math.exp(lp), base) - 1 + fee;
     if (r() < rug) x = Math.min(x, -0.9);
+    if (usd) x = (1 + x) / Math.exp(ls) - 1;
     net[n] = x; feeSum += fee; sum += x;
     if (x > 0) win++; if (x < -0.2) loss20++;
     hist[clamp(Math.floor((x * 100 + 100) / 10), 0, 15)]++;
@@ -247,14 +293,14 @@ function genWorld(r, kind) {
   const k = kind || kinds[Math.floor(r() * kinds.length)];
   let w;
   if (k === 'major') w = { sigma: U(2, 5), tvl: Lg(2e6, 2e7), turn: U(0.4, 3), fee: U(0.03, 0.15), age: U(500, 2000), top10: U(5, 22), mint: true, freeze: true, hazard: 0.001, drift: 0, bin: 10, measure: 'base' };
-  else if (k === 'mid') w = { sigma: U(5, 11), tvl: Lg(2e5, 2e6), turn: U(0.8, 6), fee: U(0.1, 0.35), age: U(60, 700), top10: U(20, 45), mint: r() < 0.95, freeze: r() < 0.9, hazard: 0.01, drift: U(-0.004, 0.004), bin: 20, measure: 'quote' };
-  else if (k === 'meme') w = { sigma: U(14, 45), tvl: Lg(3e4, 4e5), turn: U(3, 40), fee: U(0.5, 3), age: U(0.2, 20), top10: U(30, 70), mint: r() < 0.8, freeze: r() < 0.7, hazard: 0.06, drift: U(-0.06, 0.01), bin: 80, measure: 'quote' };
-  else w = { sigma: U(25, 60), tvl: Lg(2e4, 9e4), turn: U(20, 80), fee: U(1, 5), age: U(0.1, 4), top10: U(45, 85), mint: r() < 0.4, freeze: r() < 0.4, hazard: 0.3, drift: U(-0.1, -0.01), bin: 100, measure: 'quote' };
+  else if (k === 'mid') w = { sigma: U(5, 11), tvl: Lg(2e5, 2e6), turn: U(0.8, 6), fee: U(0.1, 0.35), age: U(60, 700), top10: U(20, 45), mint: r() < 0.95, freeze: r() < 0.9, hazard: 0.01, drift: U(-0.004, 0.004), bin: 20, measure: 'quote', usdq: r() < 0.5 };
+  else if (k === 'meme') w = { sigma: U(14, 45), tvl: Lg(3e4, 4e5), turn: U(3, 40), fee: U(0.5, 3), age: U(0.2, 20), top10: U(30, 70), mint: r() < 0.8, freeze: r() < 0.7, hazard: 0.06, drift: U(-0.06, 0.01), bin: 80, measure: 'quote', usdq: r() < 0.5 };
+  else w = { sigma: U(25, 60), tvl: Lg(2e4, 9e4), turn: U(20, 80), fee: U(1, 5), age: U(0.1, 4), top10: U(45, 85), mint: r() < 0.4, freeze: r() < 0.4, hazard: 0.3, drift: U(-0.1, -0.01), bin: 100, measure: 'quote', usdq: r() < 0.5 };
   const h = clamp(w.hazard + (w.mint ? 0 : 0.25) + (w.freeze ? 0 : 0.12) + Math.max(0, w.top10 - 40) / 100 * 0.3, 0, 0.9);
   const obs = {
     addr: 'sim' + Math.floor(r() * 1e9), tvl: w.tvl, vol: w.turn * w.tvl, fee: w.fee, y0: w.turn * w.fee / 100, binStep: w.bin,
     sigma: Math.max(0.5, w.sigma * Math.exp(0.25 * gauss(r))), age: w.age, top10: w.top10, mint: w.mint, freeze: w.freeze,
-    established: k === 'major', measure: w.measure
+    established: k === 'major', measure: w.measure, usdq: !!w.usdq, solSigma: SOL_SIGMA
   };
   return { kind: k, obs, truth: { sigma: w.sigma, drift: w.drift, h, turn: w.turn, fee: w.fee } };
 }
@@ -264,31 +310,34 @@ function truthPath(world, r, hours) {
   const sdH = T.sigma / 100 / Math.sqrt(24);
   const dd = age < 3 ? 0.7 : age < 14 ? 0.88 : age < 60 ? 0.96 : 0.99;
   const rugAt = r() < T.h ? Math.floor(r() * hours) : -1;
-  let lp = 0, vs = 0;
+  const usd = !!world.obs.usdq, sdS = SOL_SIGMA / 100 / Math.sqrt(24), rho2 = Math.sqrt(1 - SOL_RHO * SOL_RHO);
+  let lp = 0, vs = 0, ls = 0;
   const path = [1], vm = [];
   for (let t = 0; t < hours; t++) {
     vs = 0.9 * vs + 0.3 * gauss(r);
     const regime = Math.exp(0.35 * vs), z = gauss(r);
     const jump = r() < 0.004 * (T.sigma / 10) ? -(0.1 + 0.2 * r()) : 0;
     lp += -0.5 * Math.pow(sdH * regime, 2) + T.drift / 24 + sdH * regime * z + jump;
+    if (usd) ls += -0.5 * sdS * sdS + sdS * (SOL_RHO * z + rho2 * gauss(r));
     if (t === rugAt) lp += Math.log(0.05);
     const dead = rugAt >= 0 && t >= rugAt;
     path.push(Math.exp(lp));
     vm.push(dead ? 0.02 : (0.6 + 0.8 * Math.abs(z)) / 1.24 * regime * Math.pow(dd, t / 24));
   }
-  return { path, vm, rugged: rugAt >= 0 };
+  return { path, vm, rugged: rugAt >= 0, solR: Math.exp(ls) };
 }
 function playOnPath(world, tp, plan) {
-  const T = world.truth, V = makeVal(plan.pl, plan.ph), k = concK(plan);
+  const T = world.truth, V = makeVal(plan.pl, plan.ph, plan.strat), k = concK(plan);
   const base = world.obs.measure === 'base';
   const y0 = T.turn * T.fee / 100;
   const dil = 1 / (1 + 3 * y0);
   let fee = 0;
   for (let t = 0; t < tp.vm.length; t++) {
     const p = tp.path[t + 1];
-    if (p >= plan.pl && p <= plan.ph) fee += y0 / 24 * tp.vm[t] * k * dil;
+    if (p >= plan.pl && p <= plan.ph) fee += y0 / 24 * tp.vm[t] * k * dil * V.multLn(Math.log(p));
   }
-  return valueAt(V, tp.path[tp.path.length - 1], base) - 1 + fee;
+  const x = valueAt(V, tp.path[tp.path.length - 1], base) - 1 + fee;
+  return world.obs.usdq ? (1 + x) / (tp.solR || 1) - 1 : x;
 }
 function episode(L, r, o) {
   o = o || {};
@@ -331,18 +380,16 @@ function sigmaFromCandles(c) {
   return Math.max(0.3, Math.sqrt(v) * Math.sqrt(24) * 100);
 }
 function realizeOnCandles(plan, win, p0, o) {
-  const V = makeVal(plan.pl, plan.ph), k = concK(plan);
+  const V = makeVal(plan.pl, plan.ph, plan.strat), k = concK(plan);
   const base = o.measure === 'base';
   let fee = 0;
   for (const c of win) {
-    const lo = c.low / p0, hi = c.high / p0;
-    let ov;
-    if (hi - lo < 1e-12) ov = (lo >= plan.pl && lo <= plan.ph) ? 1 : 0;
-    else ov = Math.max(0, Math.min(hi, plan.ph) - Math.max(lo, plan.pl)) / (hi - lo);
+    const ov = V.mavg(Math.log(c.low / p0), Math.log(c.high / p0));
     fee += c.volume * o.volScale * (o.feeEff / 100) / o.tvl * Math.min(1, 0.1 / Math.max(o.y0, 1e-9)) * k * ov;
   }
   const pEnd = win[win.length - 1].close / p0;
-  return valueAt(V, pEnd, base) - 1 + fee;
+  const x = valueAt(V, pEnd, base) - 1 + fee;
+  return o.solR ? (1 + x) / o.solR - 1 : x;
 }
 function backtestPool(P, candles, L, cfg) {
   cfg = cfg || {};
@@ -352,13 +399,26 @@ function backtestPool(P, candles, L, cfg) {
   const pre = candles.slice(Math.max(0, i0 - 72), i0);
   const sig = sigmaFromCandles(pre) || P.s.sigma;
   const s = Object.assign({}, P.s, { sigma: sig, age: Math.max(0.1, P.s.age - 7), addr: P.s.addr });
-  const ev = evaluateArms(s, L, { cap: cfg.cap || 1, appetite: cfg.appetite, N: 300 });
   const win = candles.slice(i0);
   const p0 = candles[i0].open;
+  // pool berpasangan dolar: hasil harus dihitung dalam SOL, jadi butuh harga SOL pada jendela yang sama
+  let solR = null, noSol = false;
+  if (s.usdq) {
+    const sc = cfg.solCandles;
+    if (sc && sc.length > 24) {
+      const near = t => { let b = null, bd = 1e12; for (const c of sc) { const d = Math.abs(c.t - t); if (d < bd) { bd = d; b = c; } } return bd <= 7200 ? b : null; };
+      const a = near(win[0].t), z = near(win[win.length - 1].t);
+      if (a && z && a.open > 0) solR = z.close / a.open;
+      const sp = sigmaFromCandles(sc.filter(c => c.t < win[0].t).slice(-72));
+      if (sp) s.solSigma = sp;
+    }
+    if (!(solR > 0)) { solR = 1; noSol = true; }
+  }
+  const ev = evaluateArms(s, L, { cap: cfg.cap || 1, appetite: cfg.appetite, N: 300 });
   const last24 = candles.slice(-24).reduce((q, c) => q + c.volume, 0);
   const volScale = last24 > 0 && P.s.vol > 0 ? clamp(P.s.vol / last24, 0.2, 5) : 1;
   const feeEff = P.feeEff || P.s.fee;
-  const nets = ev.arms.map(a => realizeOnCandles(a.plan, win, p0, { measure: s.measure, volScale, feeEff, tvl: P.s.tvl, y0: ev.pool.y0 }));
+  const nets = ev.arms.map(a => realizeOnCandles(a.plan, win, p0, { measure: s.measure, volScale, feeEff, tvl: P.s.tvl, y0: ev.pool.y0, solR }));
   const meanAll = avg(nets);
   const policy = ev.skip ? 0 : nets[0];
   const spotIdx = ev.arms.findIndex(a => a.key === 'spot:1');
@@ -369,7 +429,7 @@ function backtestPool(P, candles, L, cfg) {
     L.counts.bt++;
     pushHist(L, { t: Date.now(), src: 'bt', pred: ev.skip ? 0 : ev.best.mean, real: policy, edge: policy - meanAll });
   }
-  return { ev, nets, policy, meanAll, severe, p0, pEnd: win[win.length - 1].close / p0 };
+  return { ev, nets, policy, meanAll, severe, p0, pEnd: win[win.length - 1].close / p0, solR, noSol };
 }
 
 /* ---------- belajar dari trade nyata ---------- */
@@ -398,8 +458,29 @@ function learnPractice(L, kind, strat, real, appetite) {
   return { pred: arm.sim.mean };
 }
 
+/* ---------- latihan per pool: pool, strategi, dan lebar rentang dipilih sendiri ---------- */
+function evalCustom(s, L, strat, half, cfg) {
+  cfg = cfg || {};
+  const ev = evaluateArms(s, L, { cap: cfg.cap || 1, appetite: cfg.appetite, N: cfg.N || 400, seed: cfg.seed });
+  const plan = planFor(s, ev.label, strat, 1, cfg.cap || 1, cfg.appetite, half);
+  const seed = cfg.seed || (hash(s.addr || 'x') + 7);
+  const sim = simulate(s, plan, ev.pool, { N: cfg.N || 400, rug: ev.rk.p, seed });
+  let near = null, bd = 1e9;
+  ev.arms.forEach(a => { if (a.strat === strat) { const d = Math.abs(a.plan.half - plan.half); if (d < bd) { bd = d; near = a; } } });
+  const adj = near ? adjOf(L, ev.bucket, near.key) : 0;
+  const snap = { bucket: ev.bucket, key: near.key, pred: sim.mean, predAdj: sim.mean + adj, x: ev.rk.x, priorLogit: logit(clamp(ev.a.rugRule, 0.001, 0.9)) };
+  return { ev, plan, sim, mean: sim.mean + adj, p10: sim.p10 + adj, adj, snap };
+}
+function learnPracticeSnap(L, snap, real) {
+  learnArm(L, snap.bucket, snap.key, snap.pred, real, WSRC.prac);
+  learnRisk(L, snap.x, real < -0.5 ? 1 : 0, WSRC.prac, snap.priorLogit);
+  L.counts.prac = (L.counts.prac || 0) + 1;
+  pushHist(L, { t: Date.now(), src: 'prac', pred: snap.predAdj, real, edge: null });
+}
+
 const api = {
   clamp, avg, nf, fmtUSD, fmtPct, pct, rng, gauss, hash, sigm, logit,
+  MV, NB, SOL_SIGMA, shapeW, evalCustom, learnPracticeSnap,
   LABEL, ALLOC, APP, STRATS, WM, ARMS, WSRC, EXITS, FEAT_NAMES,
   makeVal, valueAt, hodlAt, assess, poolStats, labelOf, bucketOf, planFor, concK, simulate, evaluateArms,
   newLearner, fixLearner, featVec, pSevere, learnRisk, learnArm, adjOf, riskWeights, learnReal,
