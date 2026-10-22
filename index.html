@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Pemandu LP</title>
+<meta name="theme-color" content="#0b6f83">
+<meta name="color-scheme" content="light dark">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Schibsted+Grotesk:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <header id="topbar">
+    <div class="tb-in">
+      <div><p class="eyebrow">Pemandu LP · Meteora</p><h1 id="title">Beranda</h1></div>
+      <span id="net" class="dot" role="img" aria-label="Status koneksi data"></span>
+    </div>
+  </header>
+
+  <main>
+    <section data-view="home" aria-label="Beranda"><div id="home-body" class="stack"></div></section>
+    <section data-view="pools" aria-label="Pilih pool" hidden><div id="pools-body" class="stack"></div></section>
+    <section data-view="play" aria-label="Playground" hidden><div id="play-body" class="stack"></div></section>
+    <section data-view="learn" aria-label="Belajar" hidden><div id="learn-body" class="stack"></div></section>
+    <section data-view="set" aria-label="Pengaturan" hidden><div id="set-body" class="stack"></div></section>
+  </main>
+
+  <nav id="nav" aria-label="Menu utama">
+    <button type="button" data-v="home" aria-current="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg><span>Beranda</span></button>
+    <button type="button" data-v="pools"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/></svg><span>Pool</span></button>
+    <button type="button" data-v="play"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4l13 8-13 8z"/></svg><span>Playground</span></button>
+    <button type="button" data-v="learn"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17l6-6 4 4 8-9M15 6h6v6"/></svg><span>Belajar</span></button>
+    <button type="button" data-v="set"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Atur</span></button>
+  </nav>
+
+  <div id="sheet" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+    <div class="sheet-in">
+      <div class="sheet-bar"><b id="sheet-title"></b><button type="button" class="btn small" data-act="sheet-close">Tutup</button></div>
+      <div id="sheet-body" class="stack"></div>
+    </div>
+  </div>
+  <div id="toast" role="status" aria-live="polite" hidden></div>
+</div>
+<noscript>Aplikasi ini membutuhkan JavaScript.</noscript>
+<script src="engine.js"></script>
+<script src="api.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
