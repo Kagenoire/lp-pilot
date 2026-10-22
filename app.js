@@ -10,7 +10,7 @@ const KEY = 'lpp.v1';
 /* ---------- state ---------- */
 function defState() {
   return {
-    settings: { wallet: '', rpc: 'https://api.mainnet-beta.solana.com', mode: 'auto', appetite: 'seimbang', minTvl: 100000, cap: 1, autoTrain: true },
+    settings: { wallet: '', rpc: 'https://api.mainnet-beta.solana.com', mode: 'auto', appetite: 'seimbang', minTvl: 100000, cap: 1, autoTrain: true, poolMode: 'biasa', memeH: 24 },
     learner: E.newLearner(), tracked: [], practice: [], lastScan: null, wallet: { bal: null, t: 0, open: [], closed: [], err: null }, sec: {}
   };
 }
@@ -165,7 +165,7 @@ function renderHome() {
   if (!tr.length) h += '<p class="note">Belum ada. Dari halaman Pilih pool, tekan "Catat: saya buka posisi ini" setelah kamu membuka posisi di Meteora. Hasilnya nanti dipelajari otomatis.</p>';
   else h += '<ul class="rows">' + tr.map(t => {
     const st = t.status === 'closed' ? 'Selesai' : t.status === 'open' ? 'Terbuka' : 'Menunggu terdeteksi';
-    return '<li class="fr3"><div class="row"><div><b>' + esc(t.name) + '</b><div class="hint">' + esc(E.STRATS[t.strat] ? E.STRATS[t.strat].name : t.strat) + ' · ' + sol(t.size) + ' · ' + esc(ago(t.openedAt)) + '</div></div>' +
+    return '<li class="fr3"><div class="row"><div><b>' + esc(t.name) + '</b><div class="hint">' + esc(E.STRATS[t.strat] ? E.STRATS[t.strat].name : t.strat) + ' · ' + sol(t.size) + ' · ' + esc(ago(t.openedAt)) + (t.H ? ' · maks ' + hrs(t.H) : '') + '</div></div>' +
       '<div class="right"><span class="pill ' + (t.status === 'closed' ? 'ok' : 'warn') + '">' + st + '</span>' + (t.real != null ? '<div class="num ' + sg(t.real) + '"><b>' + pct(t.real) + '</b></div>' : '') + '</div></div>' +
       (t.status !== 'closed' ? '<div class="row2"><input id="tc-' + t.id + '" type="text" inputmode="decimal" autocomplete="off" placeholder="Hasil akhir (%)" aria-label="Hasil akhir dalam persen"><button class="btn small" data-act="tracked-close" data-id="' + t.id + '">Catat hasil</button><button class="btn small ghost" data-act="tracked-del" data-id="' + t.id + '">Hapus</button></div>' : '') + '</li>';
   }).join('') + '</ul>';
@@ -173,8 +173,8 @@ function renderHome() {
     const tot = S.wallet.closed.reduce((a, p) => a + p.pnlUsd, 0);
     h += '<h4>Riwayat 90 hari terakhir</h4><p class="note">' + S.wallet.closed.length + ' pool ditutup, total untung-rugi <b class="num ' + sg(tot) + '">$' + nf(tot, 2) + '</b>.</p>';
   }
-  h += '<div class="panel"><h3>Pengalaman aplikasi</h3><div class="stats3"><div><span class="k">Playground</span><b class="num">' + c.sim + '</b></div><div><span class="k">Data nyata</span><b class="num">' + c.bt + '</b></div><div><span class="k">Latihan</span><b class="num">' + (c.prac || 0) + '</b></div><div><span class="k">Trade kamu</span><b class="num">' + c.real + '</b></div></div>' +
-    '<p class="hint">' + (c.sim + c.bt + c.real === 0 ? 'Belum belajar apa-apa. Mulai dari tab Playground agar rekomendasi tidak murni tebakan.' : 'Detail ada di tab Belajar.') + '</p><button class="btn" data-act="how">Cara kerja aplikasi ini</button></div>';
+  h += '<div class="panel"><h3>Pengalaman aplikasi</h3><div class="stats3"><div><span class="k">Playground</span><b class="num">' + c.sim + '</b></div><div><span class="k">Data nyata</span><b class="num">' + c.bt + '</b></div><div><span class="k">Latihan</span><b class="num">' + (c.prac || 0) + '</b></div><div><span class="k">Meme</span><b class="num">' + (c.meme || 0) + '</b></div><div><span class="k">Trade kamu</span><b class="num">' + c.real + '</b></div></div>' +
+    '<p class="hint">' + (c.sim + c.bt + c.real + (c.meme || 0) === 0 ? 'Belum belajar apa-apa. Mulai dari tab Playground agar rekomendasi tidak murni tebakan.' : 'Detail ada di tab Belajar.') + '</p><button class="btn" data-act="how">Cara kerja aplikasi ini</button></div>';
   $('home-body').innerHTML = h;
 }
 
@@ -213,9 +213,14 @@ function closeTracked(t, real, src) {
 }
 
 /* ---------- PILIH POOL ---------- */
+function modeBar() {
+  const m = S.settings.poolMode === 'meme';
+  return '<div class="seg" role="group" aria-label="Jenis pool"><button type="button" data-act="pmode" data-k="biasa" aria-pressed="' + !m + '">Pool biasa · 7 hari</button><button type="button" data-act="pmode" data-k="meme" aria-pressed="' + m + '">Memecoin · risiko tinggi</button></div>';
+}
 function renderPools() {
+  if (S.settings.poolMode === 'meme') { renderMemePools(); return; }
   const ap = S.settings.appetite, cap = capital();
-  let h = '<p class="note">Aplikasi memindai pool Meteora yang likuid, mengecek keamanan token, mengevaluasi 9 strategi per pool dengan pengalamannya, lalu menyisakan yang layak.</p>';
+  let h = modeBar() + '<p class="note">Aplikasi memindai pool Meteora yang likuid, mengecek keamanan token, mengevaluasi 9 strategi per pool dengan pengalamannya, lalu menyisakan yang layak.</p>';
   h += '<div class="chips sm" role="group" aria-label="Gaya">' + Object.keys(E.APP).map(k => '<button type="button" data-act="app" data-k="' + k + '" aria-pressed="' + (k === ap) + '">' + E.APP[k].name + '</button>').join('') + '</div>';
   h += '<p class="hint">Modal dipakai: <b class="num">' + sol(cap) + '</b> ' + (S.wallet.bal != null && S.wallet.bal > 0.05 ? '(saldo wallet)' : '(dari Pengaturan)') + '</p>';
   h += '<button class="btn primary" data-act="scan" id="scan-btn">' + (busy ? 'Sedang bekerja…' : 'Cari pool sekarang') + '</button><p class="hint" id="scan-status"></p>';
@@ -274,6 +279,12 @@ async function enrich(P, o) {
       const s = E.sigmaFromCandles(c.slice(-72));
       if (s) { P.s.sigma = s; P.sigmaOK = true; }
       if (sr) P.s.solSigma = sr.sigma; else if (P.s.usdq) P.noSol = true;
+      if (c.length >= 12) {                                   // tanda memecoin: sudah jatuh dari puncak? volume sedang meluruh?
+        const n = c.length, hi = Math.max.apply(null, c.slice(-24).map(x => x.high));
+        P.dd24 = hi > 0 ? 1 - c[n - 1].close / hi : 0;
+        const v6 = E.avg(c.slice(-6).map(x => x.volume)), pv = E.avg(c.slice(-24, -6).map(x => x.volume));
+        if (v6 > 0 && pv > 0) { P.volTrend = v6 / pv; if (P.volTrend < 0.98) P.s.tau = clamp(-9 / Math.log(P.volTrend), 8, 120); }
+      }
       // volume 24 jam sering lonjakan sesaat: campur dengan rata-rata 3 hari supaya fee tidak dilebih-lebihkan
       if (c.length >= 72 && !P._yAdj) {
         const l24 = c.slice(-24).reduce((q, x) => q + x.volume, 0), a3 = c.slice(-72).reduce((q, x) => q + x.volume, 0) / 3;
@@ -330,6 +341,180 @@ async function doScan() {
     $('scan-status').textContent = 'Gagal: ' + e.message;
     toast('Gagal memindai. Coba Tes koneksi di Pengaturan.');
   }
+}
+
+
+/* ---------- MODE MEMECOIN ---------- */
+let memeRes = null;
+const evalMemeP = (P, H) => E.evaluateMeme(P.s, S.learner, { H, cap: capital(), appetite: S.settings.appetite, N: 300 });
+const hrs = H => H >= 24 ? (H / 24) + ' hari' : H + ' jam';
+function prelimMeme(P) { const a = E.assess(P.s); return Math.min(P.s.y0, 0.4) * 0.5 - a.rugRule * 0.5 - (P.s.tvl < 4e4 ? 0.05 : 0); }
+function compactMeme(P, ev) {
+  const b = ev.best;
+  return { addr: P.addr, name: P.name, label: ev.label, skip: ev.skip, strat: b.strat, half: b.half, alloc: b.plan.alloc, mean: b.mean, p10: b.p10, win: b.sim.pWin, stop: b.sim.pStop, pH: ev.pH, score: b.score, tvl: P.s.tvl };
+}
+function renderMemePools() {
+  const H = S.settings.memeH, cap = capital();
+  let h = modeBar();
+  h += '<div class="panel"><h3>Memecoin: risiko tinggi</h3><p class="note">Pool memecoin bisa jatuh lebih dari 50% atau di-rug dalam hitungan jam. Mode ini memakai simulasi per jam, modal kecil per posisi, batas waktu, dan stop rugi. Sebagian besar hasil pemindaian akan berbunyi "jangan masuk". Itu wajar. Pakai hanya uang yang siap hilang.</p></div>';
+  h += '<div class="f"><span class="lab">Lama menahan posisi</span><div class="seg" role="group">' + [12, 24].map(x => '<button type="button" data-act="memeh" data-h="' + x + '" aria-pressed="' + (H === x) + '">' + hrs(x) + '</button>').join('') + '</div></div>';
+  h += '<div class="chips sm" role="group" aria-label="Gaya">' + Object.keys(E.APP).map(k => '<button type="button" data-act="app" data-k="' + k + '" aria-pressed="' + (k === S.settings.appetite) + '">' + E.APP[k].name + '</button>').join('') + '</div>';
+  h += '<p class="hint">Modal dipakai: <b class="num">' + sol(cap) + '</b>. Jumlah per posisi dibatasi kecil dan total semua posisi meme jangan lebih dari 20% modal.</p>';
+  h += '<button class="btn primary" data-act="scan-meme" id="scan-btn">' + (busy ? 'Sedang bekerja…' : 'Cari memecoin sekarang') + '</button><p class="hint" id="scan-status"></p>';
+  const items = memeRes ? memeRes.items.map(r => compactMeme(r.P, r.ev)) : ((S.lastMeme && S.lastMeme.H === H) ? S.lastMeme.items : []);
+  const when = memeRes ? memeRes.t : (S.lastMeme ? S.lastMeme.t : 0);
+  if (items.length) {
+    const ok = items.filter(i => !i.skip), no = items.length - ok.length;
+    h += '<h4>Hasil pemindaian ' + esc(ago(when)) + ' · tahan ' + hrs(H) + '</h4>';
+    if (!ok.length) h += '<div class="panel"><h3>Jangan masuk dulu</h3><p class="note">Tidak ada memecoin yang perkiraan hasilnya mengalahkan risikonya dalam ' + hrs(H) + '. Itu hasil yang jujur dan paling sering terjadi. Daftar di bawah adalah yang paling mendekati.</p></div>';
+    h += '<ul class="picks">' + (ok.length ? ok : items).slice(0, 12).map((i, k) => memePickHTML(i, k, !ok.length, H)).join('') + '</ul>';
+    if (no && ok.length) h += '<p class="hint">' + no + ' pool lain ditolak karena risiko terlalu tinggi atau perkiraan hasil terlalu kecil.</p>';
+  }
+  $('pools-body').innerHTML = h;
+}
+function memePickHTML(i, k, weak, H) {
+  const sname = E.STRATS[i.strat].name, rng = i.strat === 'bidask' ? '-' + i.half + '% s/d 0%' : '±' + i.half + '%';
+  return '<li><button class="pick" data-act="meme-pick" data-addr="' + esc(i.addr) + '"><div class="pick-top"><span class="rank">' + (k + 1) + '</span><span class="pname">' + esc(i.name) + '</span>' + chip(i.label) + '</div>' +
+    '<div class="pick-mid">' + (i.skip ? (weak ? 'Belum layak. ' : '') + 'Strategi terbaik: ' : 'Saran: ') + '<b>' + sname + ' ' + rng + '</b>' + (i.skip ? '' : ' · pasang <b class="num">' + sol(i.alloc) + '</b> · keluar maks ' + hrs(H)) + '</div>' +
+    '<div class="pick-stats"><span><i>Rata-rata ' + hrs(H) + '</i><b class="num ' + sg(i.mean) + '">' + pct(i.mean) + '</b></span><span><i>Skenario buruk</i><b class="num ' + sg(i.p10) + '">' + pct(i.p10, 0) + '</b></span><span><i>Peluang untung</i><b class="num">' + nf(i.win * 100, 0) + '%</b></span></div></button></li>';
+}
+async function doMemeScan() {
+  if (busy) return; busy = true; renderPools();
+  const st = () => $('scan-status'), H = S.settings.memeH;
+  try {
+    st().textContent = 'Mengambil daftar pool baru dari Meteora…';
+    const pools = await A.fetchMemePools({}, S.settings.mode);
+    setNet(true, 'Meteora OK');
+    if (!pools.length) throw new Error('Tidak ada pool baru yang memenuhi syarat saat ini.');
+    pools.forEach(P => { P._pre = prelimMeme(P); });
+    const list = pools.sort((a, b) => b._pre - a._pre).slice(0, 24);
+    st().textContent = 'Membaca pergerakan harga per jam ' + list.length + ' pool…'; await tick();
+    await pmap(list, 5, P => enrich(P, { sec: false }));
+    st().textContent = 'Mengecek keamanan token lewat RPC…'; await tick();
+    for (const P of list.slice(0, 10)) { await enrich(P, { candles: false }); await A.sleep(250); }
+    st().textContent = 'Mengevaluasi strategi…'; await tick();
+    const items = list.map(P => ({ P, ev: evalMemeP(P, H) }));
+    items.sort((a, b) => (a.ev.skip - b.ev.skip) || (b.ev.best.score - a.ev.best.score));
+    memeRes = { t: Date.now(), H, items };
+    S.lastMeme = { t: memeRes.t, H, items: items.map(r => compactMeme(r.P, r.ev)).slice(0, 20) };
+    save(); busy = false; renderPools();
+    const okN = items.filter(r => !r.ev.skip).length;
+    $('scan-status').textContent = okN + ' dari ' + items.length + ' memecoin dinilai layak untuk ' + hrs(H) + '.';
+  } catch (e) {
+    busy = false; setNet(false, e.message); renderPools();
+    $('scan-status').textContent = 'Gagal: ' + e.message;
+    toast('Gagal memindai. Coba Tes koneksi di Pengaturan.');
+  }
+}
+const EXITS_MEME = H => [
+  'Keluar paling lambat setelah ' + hrs(H) + '. Jangan menunggu harga pulih.',
+  'Stop rugi: tutup posisi begitu nilainya turun 25% dari modal yang dipasang.',
+  'Ambil fee tiap 2 sampai 3 jam. Tarik modal awal begitu fee sudah menutupnya.',
+  'Tutup langsung kalau volume anjlok, harga turun lebih dari 30% dalam satu jam, TVL turun lebih dari 40%, atau holder besar mulai menjual.',
+  'Total semua posisi memecoin jangan lebih dari 20% modalmu.'
+];
+function memeDetailHTML(P, ev) {
+  const arm = ev.best, sim = arm.sim, H = ev.H;
+  let h = '<p class="hint">TVL ' + E.fmtUSD(P.s.tvl) + ' · volume 24 jam ' + E.fmtUSD(P.vol24) + ' · fee efektif ' + nf(P.feeEff, 2) + '% · bin step ' + P.s.binStep + ' · umur pool ' + (P.s.age < 2 ? nf(P.s.age * 24, 0) + ' jam' : nf(P.s.age, P.s.age < 10 ? 1 : 0) + ' hari') + '</p>';
+  h += '<div class="row"><div>' + chip(ev.label) + '</div><span class="num">Peluang rug atau jatuh parah dalam ' + hrs(H) + ': <b>' + nf(ev.pH * 100, 1) + '%</b></span></div>';
+  if (P.sigmaErr) h += '<p class="alert">Data harga gagal dibaca, gerak harga memakai perkiraan.</p>';
+  if (ev.a.unknown.length) h += '<p class="alert">Belum terverifikasi: ' + esc(ev.a.unknown.map(u => u === 'top10' ? 'holder terbesar' : u === 'mint' ? 'mint authority' : 'freeze authority').join(', ')) + '. Dianggap berisiko. Cek manual di RugCheck.</p>';
+  if (P.dd24 != null && P.dd24 > 0.3) h += '<p class="alert">Harga sudah turun ' + nf(P.dd24 * 100, 0) + '% dari puncak 24 jam terakhir. Ini sering tanda token sudah lewat masa ramainya.</p>';
+  if (P.volTrend != null && P.volTrend < 0.7) h += '<p class="alert">Volume 6 jam terakhir tinggal ' + nf(P.volTrend * 100, 0) + '% dari sebelumnya. Fee akan menyusut cepat. Perkiraan sudah memperhitungkannya.</p>';
+  if (P.s.usdq) h += '<p class="note">Pool ini berpasangan dolar. Hasil sudah dihitung dalam SOL.</p>';
+  h += planHTML(ev, arm);
+  h += '<h4>Aturan keluar</h4><ul class="ex">' + EXITS_MEME(H).map(t => '<li>' + esc(t) + '</li>').join('') + '</ul>';
+  h += '<div class="win"><b class="num">' + nf(sim.pWin * 100, 0) + '%</b><span>peluang berakhir untung setelah fee dalam ' + hrs(H) + '</span></div>' + histSVG(sim.hist);
+  h += '<dl class="kv"><div><dt>Rata-rata (sudah dikoreksi pengalaman)</dt><dd class="' + sg(arm.mean) + '">' + pct(arm.mean) + '</dd></div><div><dt>Skenario buruk (1 dari 10)</dt><dd class="' + sg(arm.p10) + '">' + pct(arm.p10) + '</dd></div><div><dt>Kena stop rugi</dt><dd>' + nf(sim.pStop * 100, 0) + '%</dd></div><div><dt>Rugi lebih dari 20%</dt><dd>' + nf(sim.pLoss20 * 100, 0) + '%</dd></div><div><dt>Koreksi dari pengalaman</dt><dd class="' + sg(arm.adj) + '">' + pct(arm.adj) + '</dd></div></dl>';
+  h += '<h4>Faktor risiko</h4><ul class="rows">' + ev.a.rows.map(r => '<li class="fr"><span class="fn">' + esc(r.name) + '</span><span class="fv">' + esc(r.value) + '</span><span class="pill ' + r.level + '">' + (r.level === 'ok' ? 'Aman' : r.level === 'warn' ? 'Waspada' : 'Bahaya') + '</span><span class="fnote">' + esc(r.note) + '</span></li>').join('') + '</ul>';
+  h += '<h4>Peringkat strategi</h4><div class="tblwrap"><table><thead><tr><th>Strategi</th><th>Rata-rata</th><th>Buruk</th><th>Stop</th></tr></thead><tbody>' +
+    ev.arms.map(a => '<tr><td>' + E.STRATS[a.strat].name + ' ' + (a.strat === 'bidask' ? '-' : '±') + a.half + '%</td><td class="' + sg(a.mean) + '">' + pct(a.mean) + '</td><td class="' + sg(a.p10) + '">' + pct(a.p10, 0) + '</td><td>' + nf(a.sim.pStop * 100, 0) + '%</td></tr>').join('') + '</tbody></table></div>';
+  h += '<div class="actions"><a class="btn" href="https://app.meteora.ag/dlmm/' + esc(P.addr) + '" target="_blank" rel="noopener">Buka di Meteora</a>' +
+    '<button class="btn" data-act="bt-meme" data-addr="' + esc(P.addr) + '">Uji mundur ' + hrs(H) + ' terakhir (data nyata)</button>' +
+    (ev.skip ? '' : '<div class="trackbox"><label class="f"><span class="lab">Berapa SOL yang akan kamu pasang?</span><input id="track-size" type="text" inputmode="decimal" autocomplete="off" value="' + arm.plan.alloc + '"></label><button class="btn primary" data-act="meme-track" data-addr="' + esc(P.addr) + '">Catat: saya buka posisi ini</button><p class="hint">Aplikasi tidak membuka posisi. Kamu membukanya di Meteora, lalu aplikasi memantau wallet dan belajar dari hasilnya.</p></div>') +
+    '</div><div id="bt-out"></div>';
+  return h;
+}
+async function openMeme(addr) {
+  const H = S.settings.memeH;
+  let rec = memeRes && memeRes.items.find(r => r.P.addr === addr);
+  if (!rec) {
+    openSheet('Memuat pool…', '<p class="note">Mengambil data terbaru.</p>');
+    try {
+      const P = await A.fetchPool(addr, S.settings.mode);
+      if (!P) throw new Error('Pool tidak ditemukan.');
+      await enrich(P);
+      rec = { P };
+    } catch (e) { $('sheet-body').innerHTML = '<p class="alert">' + esc(e.message) + '</p>'; return; }
+  } else openSheet(rec.P.name, '');
+  rec.ev = evalMemeP(rec.P, H); rec.meme = true; curDetail = rec;
+  $('sheet-title').textContent = rec.P.name;
+  $('sheet-body').innerHTML = memeDetailHTML(rec.P, rec.ev);
+}
+function trackMeme(addr) {
+  if (!curDetail || curDetail.P.addr !== addr || !curDetail.meme) return;
+  const size = numIn('track-size');
+  if (!(size > 0)) { toast('Isi jumlah SOL yang valid.'); return; }
+  const { P, ev } = curDetail, arm = ev.best;
+  S.tracked.push({
+    id: 't' + Date.now().toString(36), addr: P.addr, name: P.name, openedAt: Date.now(), size, strat: arm.strat, half: arm.half, H: ev.H, status: 'planned',
+    snap: { bucket: ev.bucket, key: arm.key, pred: arm.sim.mean, predAdj: arm.mean, x: ev.rk.x, priorLogit: E.logit(clamp(ev.a.rugRule, 0.001, 0.9)) }
+  });
+  save(); closeSheet(); renderHome(); toast('Dicatat. Buka posisinya di Meteora, lalu Segarkan di Beranda. Tutup paling lambat setelah ' + hrs(ev.H) + '.');
+}
+async function backtestMemeOne(addr) {
+  const out = $('bt-out'); if (!out || !curDetail) return;
+  out.innerHTML = '<p class="note">Mengambil data harga per jam…</p>';
+  try {
+    const P = curDetail.P, H = S.settings.memeH;
+    const rs = await Promise.all([A.fetchCandles(P.addr, 72, S.settings.mode), P.s.usdq ? getSolRef() : null]);
+    const r = E.backtestMeme(P, rs[0], S.learner, { H, cap: capital(), appetite: S.settings.appetite, solCandles: rs[1] && rs[1].candles });
+    if (!r) { out.innerHTML = '<p class="alert">Data harga pool ini kurang dari ' + (H + 14) + ' jam, jadi belum bisa diuji mundur.</p>'; return; }
+    save();
+    out.innerHTML = '<h4>Hasil uji mundur (' + hrs(H) + ' terakhir, harga nyata)</h4><div class="tblwrap"><table><thead><tr><th>Strategi</th><th>Perkiraan</th><th>Nyata</th></tr></thead><tbody>' +
+      r.ev.arms.map((a, j) => '<tr><td>' + E.STRATS[a.strat].name + ' ' + (a.strat === 'bidask' ? '-' : '±') + a.half + '%</td><td>' + pct(a.sim.mean) + '</td><td class="' + sg(r.nets[j]) + '"><b>' + pct(r.nets[j]) + '</b></td></tr>').join('') + '</tbody></table></div>' +
+      '<p class="hint">Harga akhir ' + pct(r.pEnd - 1) + ' dari harga awal. Stop rugi 25% ikut diterapkan. Pool yang bertahan sampai sekarang cenderung lebih baik daripada yang sudah rug, jadi hasil ini optimis. Sudah dipelajari.</p>';
+    toast('Uji mundur selesai dan dipelajari.');
+  } catch (e) { out.innerHTML = '<p class="alert">Gagal: ' + esc(e.message) + '</p>'; }
+}
+async function doTrainMeme(n) {
+  if (busy) { toast('Masih ada proses berjalan.'); return; }
+  busy = true; stopFlag = false;
+  const H = S.settings.memeH;
+  $('mtrain-prog').hidden = false; $('mtrain-out').innerHTML = '';
+  const chunk = 20; let done = 0, pol = 0, all = 0, skip = 0, rug = 0, trap = 0, trapSkip = 0, stopN = 0;
+  while (done < n && !stopFlag) {
+    const m = Math.min(chunk, n - done);
+    const r = E.trainMeme(S.learner, m, { H, appetite: S.settings.appetite });
+    pol += r.avgPolicy * m; all += r.avgAll * m; skip += r.skipN; rug += r.rugN; trap += r.trapN; trapSkip += r.trapSkip; stopN += r.stopN;
+    done += m; $('mtrain-bar').style.width = (done / n * 100) + '%';
+    await tick();
+  }
+  busy = false; save(); $('mtrain-prog').hidden = true;
+  if (done > 0) $('mtrain-out').innerHTML = '<dl class="kv"><div><dt>Putaran selesai (' + hrs(H) + ')</dt><dd>' + done + '</dd></div><div><dt>Rata-rata strategi pilihan app</dt><dd class="' + sg(pol / done) + '">' + pct(pol / done) + '</dd></div><div><dt>Rata-rata strategi acak</dt><dd class="' + sg(all / done) + '">' + pct(all / done) + '</dd></div><div><dt>Pool ditolak app</dt><dd>' + skip + ' dari ' + done + '</dd></div><div><dt>Rug terjadi</dt><dd>' + rug + '</dd></div><div><dt>Jebakan dihindari</dt><dd>' + (trap ? trapSkip + ' dari ' + trap : '-') + '</dd></div><div><dt>Kena stop rugi</dt><dd>' + stopN + '</dd></div></dl><p class="hint">Dunia simulasi dibuat oleh pembuat aplikasi. Ini melatih kebiasaan menolak dan keluar cepat, belum membuktikan untung di pasar nyata.</p>';
+  renderHome(); toast(stopFlag ? 'Pelatihan dihentikan.' : 'Pelatihan memecoin selesai.');
+}
+async function doBtMeme() {
+  if (busy) { toast('Masih ada proses berjalan.'); return; }
+  busy = true; $('bt-meme-prog').hidden = false; const out = $('bt-meme-out'); out.innerHTML = '<p class="note">Mengambil daftar pool baru…</p>';
+  const H = S.settings.memeH;
+  try {
+    let pools = memeRes ? memeRes.items.map(r => r.P) : await A.fetchMemePools({}, S.settings.mode);
+    pools = pools.slice().sort((a, b) => b.vol24 - a.vol24).slice(0, 12);
+    const sr = await getSolRef(); let done = 0, pol = 0, all = 0, used = 0, fail = 0;
+    await pmap(pools, 3, async P => {
+      try {
+        const c = await A.fetchCandles(P.addr, 72, S.settings.mode);
+        const r = E.backtestMeme(P, c, S.learner, { H, cap: 1, appetite: S.settings.appetite, solCandles: sr && sr.candles });
+        if (r) { used++; pol += r.policy; all += r.meanAll; } else fail++;
+      } catch (e) { fail++; }
+      done++; $('bt-meme-bar').style.width = (done / pools.length * 100) + '%';
+    });
+    busy = false; save(); $('bt-meme-prog').hidden = true;
+    if (!used) { out.innerHTML = '<p class="alert">Tidak ada pool dengan data harga cukup (butuh minimal ' + (H + 14) + ' jam).</p>'; return; }
+    out.innerHTML = '<dl class="kv"><div><dt>Pool diuji</dt><dd>' + used + (fail ? ' <small>(' + fail + ' gagal)</small>' : '') + '</dd></div><div><dt>Rata-rata strategi pilihan app</dt><dd class="' + sg(pol / used) + '">' + pct(pol / used) + '</dd></div><div><dt>Rata-rata semua strategi</dt><dd class="' + sg(all / used) + '">' + pct(all / used) + '</dd></div></dl><p class="hint">Sudah dipelajari. Pool yang sudah rug hilang dari daftar, jadi hasil ini optimis. ' + hrs(H) + ' terakhir bukan jaminan hari berikutnya.</p>';
+    renderHome(); toast('Uji mundur memecoin selesai.');
+  } catch (e) { busy = false; $('bt-meme-prog').hidden = true; out.innerHTML = '<p class="alert">Gagal: ' + esc(e.message) + '</p>'; setNet(false, e.message); }
 }
 
 /* ---------- detail pool ---------- */
@@ -413,6 +598,8 @@ function knownPools() {
   const m = new Map();
   if (scanRes) scanRes.items.forEach(r => m.set(r.P.addr, r.P.name));
   else if (S.lastScan) S.lastScan.items.forEach(i => m.set(i.addr, i.name));
+  if (memeRes) memeRes.items.forEach(r => m.set(r.P.addr, r.P.name));
+  else if (S.lastMeme) S.lastMeme.items.forEach(i => m.set(i.addr, i.name));
   return Array.from(m.entries());
 }
 function practiceHTML() {
@@ -424,6 +611,7 @@ function practiceHTML() {
     '<div class="grid"><label class="f"><span class="lab">Strategi</span><select id="pr-strat">' + Object.keys(E.STRATS).map(k => '<option value="' + k + '">' + E.STRATS[k].name + '</option>').join('') + '</select></label>' +
     '<label class="f"><span class="lab">Lebar rentang (%)</span><input id="pr-half" type="text" inputmode="decimal" autocomplete="off" placeholder="mis. 6 untuk ±6%"></label></div>' +
     '<p class="hint">Curve dan Spot: isi setengah lebar (6 untuk -6% sampai +6%). Bid-Ask: isi berapa persen ke bawah (mis. 40 untuk -40% sampai 0%).</p>' +
+    '<label class="f"><span class="lab">Lama latihan</span><select id="pr-h"><option value="168">7 hari (pool biasa)</option><option value="24">1 hari (memecoin)</option><option value="12">12 jam (memecoin)</option></select></label>' +
     '<label class="f"><span class="lab">Sudah dibuka berapa jam yang lalu? (kosongkan kalau baru)</span><input id="pr-ago" type="text" inputmode="decimal" autocomplete="off" placeholder="mis. 12"></label>' +
     '<button class="btn primary" data-act="prac-start">Catat posisi latihan</button></div>';
   return h + '<div id="prac-lists">' + pracLists() + '</div>';
@@ -433,10 +621,12 @@ function pracLists() {
   let h = '<h4>Posisi latihan berjalan</h4>';
   if (!op.length) h += '<p class="note">Belum ada.</p>';
   else h += '<ul class="rows">' + op.slice().reverse().map(x => {
-    const d = (Date.now() - x.t0) / 864e5;
-    return '<li class="fr3"><div class="row"><div><b>' + esc(x.name) + '</b><div class="hint">' + esc(E.STRATS[x.strat].name) + ' ' + (x.strat === 'bidask' ? '-' + x.half + '% s/d 0%' : '±' + x.half + '%') + ' · hari ke-' + nf(Math.floor(d) + 1, 0) + ' dari 7</div></div>' +
+    const hh = (Date.now() - x.t0) / 36e5, Hh = x.H || 168;
+    const prog = Hh === 168 ? 'hari ke-' + nf(Math.floor(hh / 24) + 1, 0) + ' dari 7' : 'jam ke-' + nf(Math.floor(hh), 0) + ' dari ' + Hh;
+    const early = Hh === 168 ? (hh < 120 ? ' · tutup posisi di LP Army setelah hari ke-5' : '') : (hh < Hh * 0.8 ? ' · tutup posisi setelah jam ke-' + Math.ceil(Hh * 0.8) : '');
+    return '<li class="fr3"><div class="row"><div><b>' + esc(x.name) + '</b><div class="hint">' + esc(E.STRATS[x.strat].name) + ' ' + (x.strat === 'bidask' ? '-' + x.half + '% s/d 0%' : '±' + x.half + '%') + ' · ' + prog + '</div></div>' +
       '<div class="right"><div class="hint">perkiraan rata-rata</div><b class="num ' + sg(x.mean) + '">' + pct(x.mean) + '</b></div></div>' +
-      '<div class="hint">Skenario buruk ' + pct(x.p10, 0) + ' · peluang untung ' + nf(x.win * 100, 0) + '%' + (d < 5 ? ' · tutup posisi di LP Army setelah hari ke-5' : '') + '</div>' +
+      '<div class="hint">Skenario buruk ' + pct(x.p10, 0) + ' · peluang untung ' + nf(x.win * 100, 0) + '%' + early + '</div>' +
       '<div class="row2"><input id="pc-' + x.id + '" type="text" inputmode="decimal" autocomplete="off" placeholder="Hasil akhir (%)" aria-label="Hasil akhir dalam persen"><button class="btn small" data-act="prac-close" data-id="' + x.id + '">Catat hasil</button><button class="btn small ghost" data-act="prac-del" data-id="' + x.id + '">Hapus</button></div></li>';
   }).join('') + '</ul>';
   if (dn.length) h += '<h4>Latihan selesai</h4><ul class="rows">' + dn.map(x => '<li class="fr2"><div><b>' + esc(x.name) + '</b><div class="hint">' + esc(E.STRATS[x.strat].name) + ' ' + (x.strat === 'bidask' ? '-' + x.half + '%' : '±' + x.half + '%') + ' · perkiraan ' + pct(x.mean) + '</div></div><div class="right"><b class="num ' + sg(x.real) + '">' + pct(x.real) + '</b><div class="hint">selisih ' + pct(x.real - x.mean) + '</div></div></li>').join('') + '</ul>';
@@ -454,6 +644,10 @@ function renderPlay() {
     '<div class="prog" id="train-prog" hidden><i id="train-bar"></i></div><button class="btn small ghost" data-act="train-stop" id="train-stop" hidden>Hentikan</button><div id="train-out"></div></div>';
   h += practiceHTML();
   h += '<div class="panel"><h3>Satu putaran, dijelaskan</h3><p class="note">Lihat satu contoh dari awal sampai akhir, lalu kebenaran tersembunyinya dibuka.</p><button class="btn" data-act="one">Mainkan 1 putaran</button><div id="one-out"></div></div>';
+  h += '<div class="panel"><h3>Latih mode memecoin</h3><p class="note">Pool memecoin dan jebakan acak, ditahan ' + hrs(S.settings.memeH) + ' dengan stop rugi 25%. Lama tahan diatur di tab Pool, mode Memecoin.</p>' +
+    '<div class="chips sm" role="group" aria-label="Jumlah putaran meme"><button class="btn small" data-act="train-meme" data-n="100">100 putaran</button><button class="btn small" data-act="train-meme" data-n="300">300 putaran</button></div>' +
+    '<div class="prog" id="mtrain-prog" hidden><i id="mtrain-bar"></i></div><div id="mtrain-out"></div>' +
+    '<button class="btn" data-act="bt-meme-all">Uji mundur memecoin data nyata</button><div class="prog" id="bt-meme-prog" hidden><i id="bt-meme-bar"></i></div><div id="bt-meme-out"></div></div>';
   h += '<div class="panel"><h3>Uji mundur data nyata</h3><p class="note">Mengambil pool nyata dan harga per jam 7 hari terakhir, lalu menghitung apa yang akan terjadi kalau semua strategi dipakai saat itu. Perlu koneksi ke Meteora.</p><button class="btn" data-act="bt-all">Uji mundur sampai 15 pool</button><div class="prog" id="bt-prog" hidden><i id="bt-bar"></i></div><div id="bt-all-out"></div>' +
     '<p class="hint">Catatan: pool yang sudah rug biasanya hilang dari daftar, jadi hasil ini sedikit terlalu optimis.</p></div>';
   h += '<p class="hint">Sampel dipelajari: playground ' + c.sim + ' · data nyata ' + c.bt + ' · latihan ' + (c.prac || 0) + ' · trade kamu ' + c.real + '.</p>';
@@ -518,9 +712,9 @@ async function doBtAll() {
 /* ---------- BELAJAR ---------- */
 const SIGL = { L: 'harga tenang', M: 'harga sedang', H: 'harga liar' };
 function renderLearn() {
-  const L = S.learner, c = L.counts, wt = c.sim * E.WSRC.sim + c.bt * E.WSRC.bt + (c.prac || 0) * E.WSRC.prac + c.real * E.WSRC.real;
+  const L = S.learner, c = L.counts, wt = (c.sim + (c.meme || 0)) * E.WSRC.sim + c.bt * E.WSRC.bt + (c.prac || 0) * E.WSRC.prac + c.real * E.WSRC.real;
   const conf = wt < 8 ? 'masih sangat sedikit' : wt < 30 ? 'masih sedikit' : wt < 100 ? 'mulai berarti' : 'cukup banyak';
-  let h = '<div class="panel"><h3>Seberapa banyak yang dipelajari</h3><div class="stats3"><div><span class="k">Playground</span><b class="num">' + c.sim + '</b></div><div><span class="k">Data nyata</span><b class="num">' + c.bt + '</b></div><div><span class="k">Latihan</span><b class="num">' + (c.prac || 0) + '</b></div><div><span class="k">Trade kamu</span><b class="num">' + c.real + '</b></div></div>' +
+  let h = '<div class="panel"><h3>Seberapa banyak yang dipelajari</h3><div class="stats3"><div><span class="k">Playground</span><b class="num">' + c.sim + '</b></div><div><span class="k">Data nyata</span><b class="num">' + c.bt + '</b></div><div><span class="k">Latihan</span><b class="num">' + (c.prac || 0) + '</b></div><div><span class="k">Meme</span><b class="num">' + (c.meme || 0) + '</b></div><div><span class="k">Trade kamu</span><b class="num">' + c.real + '</b></div></div>' +
     '<p class="note">Bobot belajar total ' + nf(wt, 1) + ': ' + conf + '. Satu trade nyata berbobot ' + nf(E.WSRC.real / E.WSRC.sim, 0) + ' kali satu putaran playground.</p><button class="btn small" data-act="how">Cara kerja aplikasi ini</button></div>';
   const err = L.hist.filter(x => !(x.pred === 0 && x.real === 0)).map(x => Math.abs(x.real - x.pred));
   const roll = []; for (let i = 0; i < err.length; i++) { const a = err.slice(Math.max(0, i - 29), i + 1); roll.push(E.avg(a)); }
@@ -532,8 +726,10 @@ function renderLearn() {
   h += '<h4>Strategi menurut pengalaman</h4>';
   if (!rows.length) h += '<p class="note">Belum ada. Jalankan Latih otomatis di tab Playground.</p>';
   else h += '<div class="tblwrap"><table><thead><tr><th>Situasi</th><th>Strategi</th><th>Sampel</th><th>Koreksi</th></tr></thead><tbody>' + rows.map(([k, v]) => {
-    const p = k.split('|'), arm = p[2].split(':'), adj = v.sum / (v.n + 5);
-    return '<tr><td>' + esc(E.LABEL[p[0]] + ', ' + SIGL[p[1]]) + '</td><td>' + esc(E.STRATS[arm[0]].name) + ' ×' + nf(parseFloat(arm[1]), 1) + '</td><td>' + nf(v.n, 1) + '</td><td class="' + sg(adj) + '">' + pct(adj) + '</td></tr>';
+    const p = k.split('|'), meme = /^m\d+$/.test(p[0]), o = meme ? 1 : 0, arm = p[2 + o].split(':'), adj = v.sum / (v.n + 5);
+    const sit = (meme ? 'Meme ' + hrs(parseInt(p[0].slice(1), 10)) + ', ' : '') + E.LABEL[p[o]] + ', ' + SIGL[p[1 + o]];
+    const sn = E.STRATS[arm[0]].name + (meme ? ' ' + (arm[0] === 'bidask' ? '-' : '±') + arm[1] + '%' : ' ×' + nf(parseFloat(arm[1]), 1));
+    return '<tr><td>' + esc(sit) + '</td><td>' + esc(sn) + '</td><td>' + nf(v.n, 1) + '</td><td class="' + sg(adj) + '">' + pct(adj) + '</td></tr>';
   }).join('') + '</tbody></table></div><p class="hint">Koreksi positif berarti strategi itu ternyata lebih baik dari hitungan awal, negatif berarti lebih buruk. Ditambahkan ke perkiraan saat memberi saran.</p>';
   $('learn-body').innerHTML = h;
 }
@@ -600,7 +796,16 @@ function howHTML() {
   '<li>Token yang punya penerbit atau pengelola, misalnya saham tokenisasi (NVDAx dan sejenisnya). Harganya mengikuti jam bursa dan penerbit bisa membekukan. Aplikasi memperlakukannya seperti token mapan biasa, jadi risikonya bisa lebih besar dari yang ditunjukkan.</li>' +
   '<li>Likuiditas LP lain di tiap bin. Fee dihitung secara rata-rata, bukan bin demi bin.</li>' +
   '<li>Biaya transaksi, selip saat swap, dan sewa akun posisi di Meteora.</li></ul>' +
-  '<h4>6. Cara memakainya supaya kerugian kecil</h4><ul class="ex">' +
+  '<h4>6. Mode memecoin (risiko tinggi)</h4><ul class="ex">' +
+  '<li><b>Beda dengan mode biasa.</b> Horizon hanya 12 jam atau 1 hari, simulasi per jam, dan pool yang dicari adalah pool baru (umur di bawah 45 hari, token belum mapan).</li>' +
+  '<li><b>Modal kecil.</b> Jumlah per posisi hanya 6 sampai 10% modal, dan total semua posisi memecoin jangan lebih dari 20%.</li>' +
+  '<li><b>Stop rugi 25%</b> dan batas waktu ikut disimulasikan. Kalau harga melompat jatuh, kerugian bisa lebih besar dari 25% karena tidak sempat keluar.</li>' +
+  '<li><b>Fee tidak dianggap abadi.</b> Volume memecoin cepat menyusut, jadi fee dikurangi seiring waktu (memakai tren volume 6 jam terakhir kalau ada). Fee tinggi juga menarik LP lain, jadi bagianmu mengencer. Fee harian dibatasi 40% dari TVL.</li>' +
+  '<li><b>Arah harga.</b> Memecoin dianggap cenderung turun pelan-pelan. Ini asumsi, bukan fakta, dan makin baru tokennya makin kuat asumsinya.</li>' +
+  '<li><b>Tidak pernah berlabel Rendah.</b> Yang terbaik hanya Sedang. Kalau mint atau freeze authority masih aktif, hasilnya Hindari.</li>' +
+  '<li><b>Banyak penolakan itu normal.</b> Di simulasi dan data nyata, sebagian besar memecoin tidak menutup risikonya. Aplikasi bilang jangan masuk kalau hasil rata-ratanya di bawah 2%.</li>' +
+  '<li><b>Yang tidak terlihat:</b> rug mendadak, dev yang menjual, dan lonjakan harga yang tidak ikut kamu nikmati.</li></ul>' +
+  '<h4>7. Cara memakainya supaya kerugian kecil</h4><ul class="ex">' +
   '<li>Latihan dulu: Latih otomatis, Uji mundur, lalu beberapa posisi latihan di LP Army dengan pool dan lebar yang berbeda. Lihat apakah selisih perkiraan dan hasil mengecil.</li>' +
   '<li>Kalau pindah ke uang sungguhan, mulai dari 0,05 sampai 0,1 SOL di satu pool berlabel Rendah, dan jangan menambah sebelum 3 posisi berturut-turut selesai.</li>' +
   '<li>Jangan pasang uang yang tidak sanggup hilang. Skenario buruk di kartu itu bisa terjadi.</li>' +
@@ -642,27 +847,27 @@ const ACT = {
     if (!A.validAddr(addr)) { toast('Pilih pool dari daftar, atau tempel alamat pool yang valid.'); return; }
     const half = numIn('pr-half');
     if (!(half >= 2 && half <= 90)) { toast('Isi lebar rentang antara 2 dan 90 (%).'); return; }
-    const strat = $('pr-strat').value, ago = numIn('pr-ago');
+    const strat = $('pr-strat').value, ago = numIn('pr-ago'), Hh = parseInt($('pr-h').value, 10) || 168;
     busy = true; b.disabled = true; b.textContent = 'Menghitung…';
     try {
-      let P = scanRes && (scanRes.items.find(r => r.P.addr === addr) || {}).P;
+      let P = (scanRes && (scanRes.items.find(r => r.P.addr === addr) || {}).P) || (memeRes && (memeRes.items.find(r => r.P.addr === addr) || {}).P);
       if (!P) { P = await A.fetchPool(addr, S.settings.mode); if (!P) throw new Error('Pool tidak ditemukan.'); await enrich(P); }
-      const r = E.evalCustom(P.s, S.learner, strat, half, { cap: 1, appetite: S.settings.appetite });
+      const r = Hh === 168 ? E.evalCustom(P.s, S.learner, strat, half, { cap: 1, appetite: S.settings.appetite }) : E.evalCustomMeme(P.s, S.learner, strat, half, { cap: 1, appetite: S.settings.appetite, H: Hh });
       S.practice.push({
-        id: 'p' + Date.now().toString(36), addr: P.addr, name: P.name, strat, half: r.plan.half, status: 'open',
+        id: 'p' + Date.now().toString(36), addr: P.addr, name: P.name, strat, half: r.plan.half, status: 'open', H: Hh,
         t0: Date.now() - (isFinite(ago) && ago > 0 ? Math.min(ago, 720) : 0) * 36e5,
         snap: r.snap, mean: r.mean, p10: r.p10, win: r.sim.pWin, label: r.ev.label
       });
       save(); busy = false; renderPlay();
-      toast('Dicatat. Perkiraan aplikasi untuk ' + P.name + ': ' + pct(r.mean) + ' dalam 7 hari.');
+      toast('Dicatat. Perkiraan aplikasi untuk ' + P.name + ': ' + pct(r.mean) + ' dalam ' + (Hh === 168 ? '7 hari' : hrs(Hh)) + '.');
     } catch (e) { busy = false; renderPlay(); toast('Gagal: ' + e.message); }
   },
   'prac-close': b => {
     const x = S.practice.find(q => q.id === b.dataset.id); if (!x) return;
     const v = numIn('pc-' + x.id);
     if (!isFinite(v) || v < -100 || v > 1000) { toast('Isi hasil akhir dalam persen antara -100 dan 1000.'); return; }
-    const d = (Date.now() - x.t0) / 864e5;
-    if (d < 5) { toast('Baru ' + nf(d, 1) + ' hari. Tunggu minimal 5 hari supaya sebanding dengan perkiraan 7 hari, atau hapus catatannya.'); return; }
+    const hh = (Date.now() - x.t0) / 36e5, Hh = x.H || 168, need = Hh === 168 ? 120 : Hh * 0.8;
+    if (hh < need) { toast(Hh === 168 ? 'Baru ' + nf(hh / 24, 1) + ' hari. Tunggu minimal 5 hari supaya sebanding dengan perkiraan 7 hari, atau hapus catatannya.' : 'Baru ' + nf(hh, 1) + ' jam. Tunggu minimal ' + Math.ceil(need) + ' jam supaya sebanding dengan perkiraan ' + hrs(Hh) + ', atau hapus catatannya.'); return; }
     E.learnPracticeSnap(S.learner, x.snap, v / 100);
     x.status = 'done'; x.real = v / 100; x.closedAt = Date.now();
     save(); renderPlay(); renderHome();
@@ -670,6 +875,19 @@ const ACT = {
   },
   'prac-del': b => { S.practice = S.practice.filter(q => q.id !== b.dataset.id); save(); renderPlay(); },
   how: () => openSheet('Cara kerja aplikasi', howHTML()),
+  pmode: b => { S.settings.poolMode = b.dataset.k; save(); renderPools(); },
+  memeh: b => {
+    const h = parseInt(b.dataset.h, 10); if (h !== 12 && h !== 24) return;
+    S.settings.memeH = h;
+    if (memeRes) { memeRes.items = memeRes.items.map(r => ({ P: r.P, ev: evalMemeP(r.P, h) })); memeRes.items.sort((a, b) => (a.ev.skip - b.ev.skip) || (b.ev.best.score - a.ev.best.score)); memeRes.H = h; S.lastMeme = { t: memeRes.t, H: h, items: memeRes.items.map(r => compactMeme(r.P, r.ev)).slice(0, 20) }; }
+    save(); renderPools(); renderPlay();
+  },
+  'scan-meme': () => doMemeScan(),
+  'meme-pick': b => openMeme(b.dataset.addr),
+  'meme-track': b => trackMeme(b.dataset.addr),
+  'bt-meme': b => backtestMemeOne(b.dataset.addr),
+  'train-meme': b => doTrainMeme(parseInt(b.dataset.n, 10)),
+  'bt-meme-all': () => doBtMeme(),
   'notice-ok': () => { delete S.notice; save(); renderHome(); },
   auto: b => { S.settings.autoTrain = b.dataset.k === '1'; save(); renderSet(); if (S.settings.autoTrain) autoLearn(); },
   'tracked-del': b => { S.tracked = S.tracked.filter(x => x.id !== b.dataset.id); save(); renderHome(); },
@@ -733,6 +951,7 @@ async function autoLearn() {
   autoBusy = true; setAutoStatus();
   try {
     for (let d = 0; d < 150; d += 25) { E.trainSim(S.learner, 25, { appetite: S.settings.appetite }); await tick(); }
+    for (let d = 0; d < 60; d += 20) { E.trainMeme(S.learner, 20, { H: 12, appetite: S.settings.appetite }); E.trainMeme(S.learner, 20, { H: 24, appetite: S.settings.appetite }); await tick(); }
     S.autoT = Date.now();
     if (Date.now() - (S.autoBt || 0) > 24 * 36e5) {   // uji mundur nyata maksimal sekali sehari agar jendela yang sama tidak dihitung berulang
       try {

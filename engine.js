@@ -160,7 +160,7 @@ const labelOf = (p, hard) => (hard || p > 0.12) ? 'hindari' : p > 0.04 ? 'tinggi
 const bucketOf = (label, sigma) => label + '|' + (sigma <= 5 ? 'L' : sigma <= 15 ? 'M' : 'H');
 
 /* ---------- pembelajaran ---------- */
-function newLearner() { return { mv: MV, w: new Array(FEAT_NAMES.length).fill(0), b: 0, arms: {}, counts: { sim: 0, bt: 0, real: 0, prac: 0 }, hist: [] }; }
+function newLearner() { return { mv: MV, w: new Array(FEAT_NAMES.length).fill(0), b: 0, arms: {}, counts: { sim: 0, bt: 0, real: 0, prac: 0, meme: 0 }, hist: [] }; }
 function fixLearner(L) {
   if (!L || typeof L !== 'object') return newLearner();
   if (L.mv !== MV) return newLearner();          // model berubah, angka lama tidak sebanding
@@ -168,7 +168,7 @@ function fixLearner(L) {
   L.w = Array.isArray(L.w) ? n.w.map((_, i) => (isFinite(L.w[i]) ? L.w[i] : 0)) : n.w;
   L.b = isFinite(L.b) ? L.b : 0;
   L.arms = L.arms && typeof L.arms === 'object' ? L.arms : {};
-  L.counts = Object.assign({ sim: 0, bt: 0, real: 0, prac: 0 }, L.counts || {});
+  L.counts = Object.assign({ sim: 0, bt: 0, real: 0, prac: 0, meme: 0 }, L.counts || {});
   L.hist = Array.isArray(L.hist) ? L.hist : [];
   return L;
 }
@@ -304,40 +304,45 @@ function genWorld(r, kind) {
   };
   return { kind: k, obs, truth: { sigma: w.sigma, drift: w.drift, h, turn: w.turn, fee: w.fee } };
 }
-function truthPath(world, r, hours) {
+function truthPath(world, r, hours, hazScale) {
   hours = hours || 168;
   const T = world.truth, age = world.obs.age;
   const sdH = T.sigma / 100 / Math.sqrt(24);
   const dd = age < 3 ? 0.7 : age < 14 ? 0.88 : age < 60 ? 0.96 : 0.99;
-  const rugAt = r() < T.h ? Math.floor(r() * hours) : -1;
+  const rugAt = r() < T.h * (hazScale != null ? hazScale : 1) ? Math.floor(r() * hours) : -1;
   const usd = !!world.obs.usdq, sdS = SOL_SIGMA / 100 / Math.sqrt(24), rho2 = Math.sqrt(1 - SOL_RHO * SOL_RHO);
   let lp = 0, vs = 0, ls = 0;
-  const path = [1], vm = [];
+  const path = [1], vm = [], solPath = [1];
   for (let t = 0; t < hours; t++) {
     vs = 0.9 * vs + 0.3 * gauss(r);
     const regime = Math.exp(0.35 * vs), z = gauss(r);
     const jump = r() < 0.004 * (T.sigma / 10) ? -(0.1 + 0.2 * r()) : 0;
     lp += -0.5 * Math.pow(sdH * regime, 2) + T.drift / 24 + sdH * regime * z + jump;
     if (usd) ls += -0.5 * sdS * sdS + sdS * (SOL_RHO * z + rho2 * gauss(r));
+    solPath.push(Math.exp(ls));
     if (t === rugAt) lp += Math.log(0.05);
     const dead = rugAt >= 0 && t >= rugAt;
     path.push(Math.exp(lp));
     vm.push(dead ? 0.02 : (0.6 + 0.8 * Math.abs(z)) / 1.24 * regime * Math.pow(dd, t / 24));
   }
-  return { path, vm, rugged: rugAt >= 0, solR: Math.exp(ls) };
+  return { path, vm, solPath, rugged: rugAt >= 0, solR: Math.exp(ls) };
 }
-function playOnPath(world, tp, plan) {
+function playOnPath(world, tp, plan, stop) {
   const T = world.truth, V = makeVal(plan.pl, plan.ph, plan.strat), k = concK(plan);
-  const base = world.obs.measure === 'base';
+  const base = world.obs.measure === 'base', usd = !!world.obs.usdq;
   const y0 = T.turn * T.fee / 100;
   const dil = 1 / (1 + 3 * y0);
   let fee = 0;
   for (let t = 0; t < tp.vm.length; t++) {
     const p = tp.path[t + 1];
     if (p >= plan.pl && p <= plan.ph) fee += y0 / 24 * tp.vm[t] * k * dil * V.multLn(Math.log(p));
+    if (stop != null) {                                     // stop rugi: keluar begitu nilai menyentuh batas (atau lebih buruk kalau harga melompat)
+      const xt = valueAt(V, p, base) - 1 + fee;
+      if (xt <= -stop) { const xs = Math.min(xt, -stop) - 0.01; return usd ? (1 + xs) / (tp.solPath ? tp.solPath[t + 1] : 1) - 1 : xs; }
+    }
   }
   const x = valueAt(V, tp.path[tp.path.length - 1], base) - 1 + fee;
-  return world.obs.usdq ? (1 + x) / (tp.solR || 1) - 1 : x;
+  return usd ? (1 + x) / (tp.solR || 1) - 1 : x;
 }
 function episode(L, r, o) {
   o = o || {};
@@ -432,6 +437,168 @@ function backtestPool(P, candles, L, cfg) {
   return { ev, nets, policy, meanAll, severe, p0, pEnd: win[win.length - 1].close / p0, solR, noSol };
 }
 
+
+/* ============================================================
+   MODE MEMECOIN: horizon 12 jam atau 1 hari, langkah per jam, stop rugi, modal kecil
+   ============================================================ */
+const MEME_ARMS = [['bidask', 25], ['bidask', 45], ['bidask', 70], ['spot', 20], ['spot', 40], ['curve', 20], ['curve', 40]];
+const MEME_FRAC = { rendah: 0.15, sedang: 0.10, tinggi: 0.06, hindari: 0 };   // bagian modal per posisi
+const MEME_STOP = 0.25;                                                       // stop rugi
+const MEME_MIN_GAIN = 0.02;                                                   // hasil rata-rata minimal supaya layak masuk
+const memeHazard = (p7, H) => clamp(p7 * Math.pow(H / 168, 0.6), 0.002, 0.7);
+const memeLabel = (pH, hard) => (hard || pH > 0.15) ? 'hindari' : pH > 0.07 ? 'tinggi' : 'sedang';   // memecoin tidak pernah berlabel Rendah
+const memeDrift = age => age < 2 ? -0.0015 : age < 14 ? -0.0008 : -0.0003;    // per jam: meme cenderung turun
+function memeKey(strat, half) { return strat + ':' + half; }
+function memeBucket(H, label, sigma) { return 'm' + H + '|' + bucketOf(label, sigma); }
+
+function simulateH(s, pn, pool, o) {
+  o = o || {};
+  const H = o.H || 24, N = o.N || 300, stop = o.stop != null ? o.stop : MEME_STOP;
+  const sdH = s.sigma / 100 / Math.sqrt(24), drift = memeDrift(s.age);
+  const tau = s.tau || (s.age < 2 ? 30 : s.age < 7 ? 60 : 120);
+  const k = concK(pn), V = makeVal(pn.pl, pn.ph, pn.strat);
+  const base = s.measure === 'base', usd = !!s.usdq;
+  const sigS = (s.solSigma || SOL_SIGMA) / 100, sdS = sigS / Math.sqrt(24), muS = -0.5 * sigS * sigS / 24, rho2 = Math.sqrt(1 - SOL_RHO * SOL_RHO);
+  const y0d = Math.min(pool.y0, 0.4), y0 = y0d / 24 / (1 + 3 * y0d);      // fee tinggi menarik LP lain, jadi bagianmu mengencer
+  const pj = Math.min(0.05, 0.004 * (s.sigma / 10));
+  const r = rng(o.seed || 20261022), rugP = o.rug || 0;
+  const net = new Array(N), hist = new Array(16).fill(0);
+  let sum = 0, win = 0, loss20 = 0, stopped = 0, feeSum = 0;
+  for (let n = 0; n < N; n++) {
+    const rugAt = r() < rugP ? Math.floor(r() * H) : -1;
+    let lp = 0, ls = 0, fee = 0, vs = 0, x = 0, done = false;
+    for (let t = 0; t < H; t++) {
+      vs = 0.9 * vs + 0.3 * gauss(r);
+      const regime = Math.exp(0.35 * vs), z = gauss(r);
+      const jump = r() < pj ? -(0.1 + 0.2 * r()) : 0;
+      lp += -0.5 * Math.pow(sdH * regime, 2) + drift + sdH * regime * z + jump;
+      if (t === rugAt) lp += Math.log(0.05);
+      if (usd) ls += muS + sdS * (SOL_RHO * z + rho2 * gauss(r));
+      const p = Math.exp(lp), dead = rugAt >= 0 && t >= rugAt;
+      if (!dead && p >= pn.pl && p <= pn.ph) fee += y0 * Math.exp(-(t + 0.5) / tau) * (0.6 + 0.8 * Math.abs(z)) / 1.24 * regime * k * V.multLn(lp);
+      x = valueAt(V, p, base) - 1 + fee;
+      if (usd) x = (1 + x) / Math.exp(ls) - 1;
+      if (x <= -stop) { x = Math.min(x, -stop) - 0.01; done = true; stopped++; break; }
+    }
+    net[n] = x; sum += x; feeSum += fee;
+    if (x > 0) win++; if (x < -0.2) loss20++;
+    hist[clamp(Math.floor((x * 100 + 100) / 10), 0, 15)]++;
+  }
+  const sorted = net.slice().sort((p, q) => p - q), q = f => sorted[Math.floor(f * (N - 1))];
+  return { pWin: win / N, pLoss20: loss20 / N, pStop: stopped / N, p10: q(0.1), p50: q(0.5), p90: q(0.9), mean: sum / N, hist, meanFee: feeSum / N, k };
+}
+
+function planMeme(s, label, strat, half, cap, app) {
+  const pn = planFor(s, label, strat, 1, cap, app, half);
+  const mul = (APP[app] || APP.seimbang).allocMul;
+  pn.alloc = Math.floor(cap * Math.min(0.2, MEME_FRAC[label] * mul) * 100) / 100;
+  pn.reserve = cap - pn.alloc;
+  pn.key = memeKey(strat, pn.half);
+  return pn;
+}
+function evaluateMeme(s, L, cfg) {
+  cfg = cfg || {};
+  const H = cfg.H || 24, cap = cfg.cap || 1, app = cfg.appetite || 'seimbang', lam = (APP[app] || APP.seimbang).lam;
+  const a = assess(s), rk = pSevere(s, a, L);
+  const pH = memeHazard(rk.p, H), label = memeLabel(pH, a.hard);
+  const pool = poolStats(s), bucket = memeBucket(H, label, s.sigma);
+  const seed = cfg.seed || (hash(s.addr || 'x') + 11);
+  const arms = MEME_ARMS.map(([st, half]) => {
+    const plan = planMeme(s, label, st, half, cap, app);
+    const sim = simulateH(s, plan, pool, { H, N: cfg.N || 300, rug: pH, seed });
+    const adj = adjOf(L, bucket, plan.key);
+    const mean = sim.mean + adj, p10 = sim.p10 + adj;
+    return { key: plan.key, strat: st, half, plan, sim, adj, mean, p10, score: mean + lam * Math.min(0, p10) };
+  }).sort((p, q) => q.score - p.score);
+  const best = arms[0];
+  const skip = label === 'hindari' || best.mean <= MEME_MIN_GAIN;
+  return { a, rk, pH, label, pool, bucket, arms, best, skip, cap, app, s, H, stop: MEME_STOP };
+}
+function episodeMeme(L, r, o) {
+  o = o || {};
+  const H = o.H || 24;
+  const u = r();
+  const world = genWorld(r, o.kind || (u < 0.5 ? 'meme' : u < 0.8 ? 'trap' : 'mid'));
+  const ev = evaluateMeme(world.obs, L, { H, cap: o.cap || 1, appetite: o.appetite, N: o.N || 120, seed: o.seed });
+  const tp = truthPath(world, r, H, Math.pow(H / 168, 0.6));
+  const nets = ev.arms.map(a => playOnPath(world, tp, a.plan, ev.stop));
+  const meanAll = avg(nets), policy = ev.skip ? 0 : nets[0];
+  if (o.learn !== false) {
+    ev.arms.forEach((a, j) => learnArm(L, ev.bucket, a.key, a.sim.mean, nets[j], WSRC.sim));
+    L.counts.meme = (L.counts.meme || 0) + 1;
+    pushHist(L, { t: Date.now(), src: 'meme', pred: ev.skip ? 0 : ev.best.mean, real: policy, edge: policy - meanAll });
+  }
+  return { world, ev, tp, nets, policy, meanAll, rugged: tp.rugged };
+}
+function trainMeme(L, n, o) {
+  o = o || {};
+  const r = rng(o.seed || ((Date.now() ^ (Math.random() * 4294967296)) >>> 0));
+  let pol = 0, all = 0, skipN = 0, rugN = 0, trapSkip = 0, trapN = 0, stopN = 0;
+  for (let i = 0; i < n; i++) {
+    const e = episodeMeme(L, r, { H: o.H, cap: o.cap, appetite: o.appetite, N: 100, seed: i + 1 });
+    pol += e.policy; all += e.meanAll; if (e.ev.skip) skipN++; if (e.rugged) rugN++;
+    if (!e.ev.skip && e.policy <= -MEME_STOP) stopN++;
+    if (e.world.kind === 'trap') { trapN++; if (e.ev.skip) trapSkip++; }
+  }
+  return { n, avgPolicy: pol / n, avgAll: all / n, edge: (pol - all) / n, skipN, rugN, trapN, trapSkip, stopN };
+}
+/* dari harga nyata: pakai H jam terakhir sebagai jendela uji, data sebelumnya untuk mengukur gerak harga */
+function realizeMeme(plan, win, p0, o, stop) {
+  const V = makeVal(plan.pl, plan.ph, plan.strat), k = concK(plan), base = o.measure === 'base';
+  const conv = x => o.solR ? (1 + x) / o.solR - 1 : x;
+  let fee = 0;
+  for (const c of win) {
+    fee += c.volume * o.volScale * (o.feeEff / 100) / o.tvl * Math.min(1, 0.4 / Math.max(o.y0, 1e-9)) / (1 + 3 * Math.min(o.y0, 0.4)) * k * V.mavg(Math.log(c.low / p0), Math.log(c.high / p0));
+    const xl = valueAt(V, c.low / p0, base) - 1 + fee;
+    if (xl <= -stop) { const xc = valueAt(V, c.close / p0, base) - 1 + fee; return conv(Math.min(xc, -stop) - 0.01); }
+  }
+  return conv(valueAt(V, win[win.length - 1].close / p0, base) - 1 + fee);
+}
+function backtestMeme(P, candles, L, cfg) {
+  cfg = cfg || {};
+  const H = cfg.H || 24;
+  if (!candles || candles.length < H + 14) return null;
+  const i0 = candles.length - H, pre = candles.slice(Math.max(0, i0 - 48), i0), win = candles.slice(i0);
+  const sig = sigmaFromCandles(pre) || P.s.sigma;
+  const s = Object.assign({}, P.s, { sigma: sig, age: Math.max(0.05, P.s.age - H / 24) });
+  const p0 = candles[i0].open;
+  let solR = null, noSol = false;
+  if (s.usdq) {
+    const sc = cfg.solCandles;
+    if (sc && sc.length > 24) {
+      const near = t => { let b = null, bd = 1e12; for (const c of sc) { const d = Math.abs(c.t - t); if (d < bd) { bd = d; b = c; } } return bd <= 7200 ? b : null; };
+      const a = near(win[0].t), z = near(win[win.length - 1].t);
+      if (a && z && a.open > 0) solR = z.close / a.open;
+      const sp = sigmaFromCandles(sc.filter(c => c.t < win[0].t).slice(-72));
+      if (sp) s.solSigma = sp;
+    }
+    if (!(solR > 0)) { solR = 1; noSol = true; }
+  }
+  const ev = evaluateMeme(s, L, { H, cap: cfg.cap || 1, appetite: cfg.appetite, N: 300 });
+  const rec = candles.slice(-Math.min(24, candles.length)), avgH = rec.reduce((q, c) => q + c.volume, 0) / rec.length;
+  const volScale = avgH > 0 && P.s.vol > 0 ? clamp(P.s.vol / 24 / avgH, 0.2, 5) : 1;
+  const feeEff = P.feeEff || P.s.fee;
+  const nets = ev.arms.map(a => realizeMeme(a.plan, win, p0, { measure: s.measure, volScale, feeEff, tvl: P.s.tvl, y0: ev.pool.y0, solR }, ev.stop));
+  const meanAll = avg(nets), policy = ev.skip ? 0 : nets[0];
+  if (cfg.learn !== false) {
+    ev.arms.forEach((a, j) => learnArm(L, ev.bucket, a.key, a.sim.mean, nets[j], WSRC.bt));
+    L.counts.bt++;
+    pushHist(L, { t: Date.now(), src: 'bt', pred: ev.skip ? 0 : ev.best.mean, real: policy, edge: policy - meanAll });
+  }
+  return { ev, nets, policy, meanAll, p0, pEnd: win[win.length - 1].close / p0, solR, noSol, H };
+}
+function evalCustomMeme(s, L, strat, half, cfg) {
+  cfg = cfg || {};
+  const H = cfg.H || 24, ev = evaluateMeme(s, L, { H, cap: cfg.cap || 1, appetite: cfg.appetite, N: cfg.N || 400, seed: cfg.seed });
+  const plan = planMeme(s, ev.label, strat, half, cfg.cap || 1, cfg.appetite || 'seimbang');
+  const sim = simulateH(s, plan, ev.pool, { H, N: cfg.N || 400, rug: ev.pH, seed: cfg.seed || (hash(s.addr || 'x') + 11) });
+  let near = null, bd = 1e9;
+  ev.arms.forEach(a => { if (a.strat === strat) { const d = Math.abs(a.half - plan.half); if (d < bd) { bd = d; near = a; } } });
+  const adj = near ? adjOf(L, ev.bucket, near.key) : 0;
+  const snap = { bucket: ev.bucket, key: near ? near.key : plan.key, pred: sim.mean, predAdj: sim.mean + adj, x: ev.rk.x, priorLogit: logit(clamp(ev.a.rugRule, 0.001, 0.9)) };
+  return { ev, plan, sim, mean: sim.mean + adj, p10: sim.p10 + adj, adj, snap };
+}
+
 /* ---------- belajar dari trade nyata ---------- */
 function learnReal(L, snap, realNet) {
   // snap: {s, bucket, key, pred (sim.mean tanpa adj), x, priorLogit}
@@ -481,6 +648,7 @@ function learnPracticeSnap(L, snap, real) {
 const api = {
   clamp, avg, nf, fmtUSD, fmtPct, pct, rng, gauss, hash, sigm, logit,
   MV, NB, SOL_SIGMA, shapeW, evalCustom, learnPracticeSnap,
+  MEME_ARMS, MEME_FRAC, MEME_STOP, MEME_MIN_GAIN, memeHazard, memeLabel, simulateH, planMeme, evaluateMeme, episodeMeme, trainMeme, backtestMeme, evalCustomMeme,
   LABEL, ALLOC, APP, STRATS, WM, ARMS, WSRC, EXITS, FEAT_NAMES,
   makeVal, valueAt, hodlAt, assess, poolStats, labelOf, bucketOf, planFor, concK, simulate, evaluateArms,
   newLearner, fixLearner, featVec, pSevere, learnRisk, learnArm, adjOf, riskWeights, learnReal,

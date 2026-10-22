@@ -108,6 +108,31 @@ async function fetchPools(opts, mode) {
   if (!out.size && lastErr) throw lastErr;
   return Array.from(out.values());
 }
+/* pool baru yang berpotensi memecoin: TVL kecil sampai menengah, umur di bawah 45 hari, token belum mapan */
+async function fetchMemePools(opts, mode) {
+  opts = opts || {};
+  const minTvl = opts.minTvl || 20000, minVol = opts.minVol || 100000;
+  const fb = 'tvl>=' + minTvl + '&&volume_24h>=' + minVol + '&&is_blacklisted=false';
+  const lists = [
+    { page: 1, page_size: 100, sort_by: 'volume_24h:desc', filter_by: fb },
+    { page: 1, page_size: 100, sort_by: 'fee_tvl_ratio_24h:desc', filter_by: fb }
+  ];
+  const out = new Map(); let lastErr = null;
+  for (const p of lists) {
+    let j;
+    try { j = await meteora('/pools?' + q(p), mode); }
+    catch (e) {
+      lastErr = e;
+      try { const p2 = Object.assign({}, p); delete p2.filter_by; j = await meteora('/pools?' + q(p2), mode); } catch (e2) { lastErr = e2; continue; }
+    }
+    (j.data || []).forEach(r => {
+      const P = normPool(r);
+      if (P && !P.blacklisted && !P.s.established && P.s.age <= 45 && P.s.tvl >= minTvl && P.vol24 >= minVol && !out.has(P.addr)) out.set(P.addr, P);
+    });
+  }
+  if (!out.size && lastErr) throw lastErr;
+  return Array.from(out.values());
+}
 async function fetchPool(addr, mode) { return normPool(await meteora('/pools/' + encodeURIComponent(addr), mode)); }
 /* API Meteora menolak rentang lebih dari sekitar 72 jam per permintaan (diuji 73 candle OK, 101 ditolak),
    jadi rentang panjang diambil per potongan 72 jam lalu disambung. */
@@ -170,6 +195,6 @@ async function closedPositions(wallet, days, mode) {
 }
 const validAddr = a => typeof a === 'string' && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(a.trim());
 
-root.LPAPI = { BASE, SOL, QUOTES, normPool, fetchPools, fetchPool, fetchCandles, checkToken, solBalance, openPositions, closedPositions, validAddr, meteora, rpc, sleep };
+root.LPAPI = { BASE, SOL, QUOTES, normPool, fetchPools, fetchMemePools, fetchPool, fetchCandles, checkToken, solBalance, openPositions, closedPositions, validAddr, meteora, rpc, sleep };
 if (typeof module !== 'undefined' && module.exports) module.exports = root.LPAPI;
 })(typeof window !== 'undefined' ? window : globalThis);
